@@ -45,6 +45,10 @@ export type RepeatMode = 'off' | 'all' | 'one';
 /** Crossfade lengths offered, in seconds; 0 is off. */
 export const CROSSFADE_CHOICES = [0, 3, 6, 9, 12] as const;
 
+export type OutputPrecision = 'pcm16' | 'float32';
+export type StreamingQuality = 'lossless' | 'high' | 'normal';
+export type AutomixPerformance = 'low' | 'balanced' | 'high';
+
 interface Settings {
   shuffle: boolean;
   repeat: RepeatMode;
@@ -57,12 +61,21 @@ interface Settings {
   automix: boolean;
   /** AutoMix's blend length, in bars: a maximum, shortened for weak beat grids. */
   automixBars: number;
+  automixPerformance: AutomixPerformance;
   /** Stats for nerds: the stream's codec, bitrate and sample rate, and what Automix is doing, under the artist. */
   showNerdStats: boolean;
   /** Playback speed multiplier (0.5x to 2.0x). */
   playbackRate: number;
   /** 10-slot Web Audio & native Rust equalizer configuration. */
   eq: EqConfig;
+  balance: number;
+  outputPrecision: OutputPrecision;
+  preferUsbDac: boolean;
+  loudnessNormalization: boolean;
+  skipSilence: boolean;
+  spatialAudio: boolean;
+  directSourceStream: boolean;
+  streamingQuality: StreamingQuality;
 }
 
 interface PlayerState extends Settings {
@@ -110,13 +123,20 @@ interface PlayerState extends Settings {
   setCrossfade: (seconds: number) => void;
   setAutomix: (on: boolean) => void;
   setAutomixBars: (bars: number) => void;
+  setAutomixPerformance: (perf: AutomixPerformance) => void;
   setShowNerdStats: (on: boolean) => void;
   setPlaybackRate: (rate: number) => void;
   setSleepTimer: (option: number | 'track' | null) => void;
   setEq: (patch: Partial<EqConfig>) => void;
+  setBalance: (balance: number) => void;
+  setOutputPrecision: (precision: OutputPrecision) => void;
+  setPreferUsbDac: (on: boolean) => void;
+  setLoudnessNormalization: (on: boolean) => void;
+  setSkipSilence: (on: boolean) => void;
+  setSpatialAudio: (on: boolean) => void;
+  setDirectSourceStream: (on: boolean) => void;
+  setStreamingQuality: (quality: StreamingQuality) => void;
 }
-
-// ---- Settings, kept across visits ---------------------------------------------------
 
 const SETTINGS_KEY = 'bitchord:player';
 const DEFAULT_SETTINGS: Settings = {
@@ -128,9 +148,18 @@ const DEFAULT_SETTINGS: Settings = {
   crossfadeSec: 0,
   automix: false,
   automixBars: 16,
+  automixPerformance: 'balanced',
   showNerdStats: false,
   playbackRate: 1,
   eq: DEFAULT_EQ_CONFIG,
+  balance: 0,
+  outputPrecision: 'float32',
+  preferUsbDac: true,
+  loudnessNormalization: true,
+  skipSilence: false,
+  spatialAudio: false,
+  directSourceStream: true,
+  streamingQuality: 'lossless',
 };
 
 function loadSettings(): Settings {
@@ -147,10 +176,52 @@ function loadSettings(): Settings {
 }
 
 function saveSettings(state: Settings) {
-  const { shuffle, repeat, autoplay, volume, muted, crossfadeSec, automix, automixBars, showNerdStats, playbackRate, eq } = state;
+  const {
+    shuffle,
+    repeat,
+    autoplay,
+    volume,
+    muted,
+    crossfadeSec,
+    automix,
+    automixBars,
+    automixPerformance,
+    showNerdStats,
+    playbackRate,
+    eq,
+    balance,
+    outputPrecision,
+    preferUsbDac,
+    loudnessNormalization,
+    skipSilence,
+    spatialAudio,
+    directSourceStream,
+    streamingQuality,
+  } = state;
   localStorage.setItem(
     SETTINGS_KEY,
-    JSON.stringify({ shuffle, repeat, autoplay, volume, muted, crossfadeSec, automix, automixBars, showNerdStats, playbackRate, eq }),
+    JSON.stringify({
+      shuffle,
+      repeat,
+      autoplay,
+      volume,
+      muted,
+      crossfadeSec,
+      automix,
+      automixBars,
+      automixPerformance,
+      showNerdStats,
+      playbackRate,
+      eq,
+      balance,
+      outputPrecision,
+      preferUsbDac,
+      loudnessNormalization,
+      skipSilence,
+      spatialAudio,
+      directSourceStream,
+      streamingQuality,
+    }),
   );
 }
 
@@ -188,7 +259,25 @@ export function getPlayhead(): { sec: number; paused: boolean } | null {
   return audio ? { sec: audio.currentTime, paused: audio.paused } : null;
 }
 
-/** The running Automix blend's beat (phase 0 on the beat), for the seek bar's pulse; null between blends. */
+export function getAudioContextSampleRate(): number | null {
+  return graph?.ctx.sampleRate ?? null;
+}
+
+function applyCurrentDsp(g: AutomixGraph | null) {
+  if (!g) return;
+  const s = usePlayer.getState();
+  g.eq.applyDsp({
+    eq: s.eq,
+    balance: s.balance,
+    spatialAudio: s.spatialAudio,
+    loudnessNormalization: s.loudnessNormalization,
+  });
+}
+
+function needsWebAudioGraph(): boolean {
+  const s = usePlayer.getState();
+  return s.automix || s.eq.enabled || s.spatialAudio || Math.abs(s.balance) > 0.01;
+}
 export function getMixBeat(): { phase: number | null } | null {
   return graph?.dj.mixBeat() ?? null;
 }
@@ -308,7 +397,7 @@ function ensureAutomix(): Promise<AutomixGraph | null> {
       (snap) => usePlayer.setState({ automixState: snap }),
     );
     graph = built;
-    built.eq.applyConfig(usePlayer.getState().eq);
+    applyCurrentDsp(built);
     applyVolumes();
     if (import.meta.env.DEV) Object.assign(window, { __bcAutomix: built, __bcAnalyzer: analyzer });
     return built;
@@ -372,19 +461,17 @@ function automixHandoff() {
   intent();
 }
 
-/** Starts or stops the mix loop to match the setting; builds the Web Audio graph when AutoMix or EQ is enabled. */
 function syncAutomix() {
-  const { automix, eq } = usePlayer.getState();
-  if (!automix && !eq.enabled) {
+  if (!needsWebAudioGraph()) {
     graph?.dj.stop();
-    graph?.eq.applyConfig(eq);
+    applyCurrentDsp(graph);
     return;
   }
   void ensureAutomix().then((g) => {
     const state = usePlayer.getState();
     if (!g) return;
     void g.ctx.resume();
-    g.eq.applyConfig(state.eq);
+    applyCurrentDsp(g);
     if (state.automix) {
       g.dj.transitionBars = state.automixBars;
       g.dj.start();
@@ -661,6 +748,10 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
     if (graph) graph.dj.transitionBars = automixBars;
   },
 
+  setAutomixPerformance(automixPerformance) {
+    set({ automixPerformance });
+    saveSettings(get());
+  },
 
   setShowNerdStats(showNerdStats) {
     set({ showNerdStats });
@@ -698,8 +789,8 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
     set({ eq: nextEq });
     saveSettings(get());
     if (graph) {
-      graph.eq.applyConfig(nextEq);
-    } else if (nextEq.enabled) {
+      applyCurrentDsp(graph);
+    } else if (needsWebAudioGraph()) {
       syncAutomix();
     }
     if (isTauriDesktop()) {
@@ -712,6 +803,52 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
         })
         .catch(() => {});
     }
+  },
+
+  setBalance(balance) {
+    const clamped = Math.min(1, Math.max(-1, Number(balance.toFixed(2))));
+    set({ balance: clamped });
+    saveSettings(get());
+    if (graph) applyCurrentDsp(graph);
+    else if (needsWebAudioGraph()) syncAutomix();
+  },
+
+  setOutputPrecision(outputPrecision) {
+    set({ outputPrecision });
+    saveSettings(get());
+  },
+
+  setPreferUsbDac(preferUsbDac) {
+    set({ preferUsbDac });
+    saveSettings(get());
+  },
+
+  setLoudnessNormalization(loudnessNormalization) {
+    set({ loudnessNormalization });
+    saveSettings(get());
+    if (graph) applyCurrentDsp(graph);
+  },
+
+  setSkipSilence(skipSilence) {
+    set({ skipSilence });
+    saveSettings(get());
+  },
+
+  setSpatialAudio(spatialAudio) {
+    set({ spatialAudio });
+    saveSettings(get());
+    if (graph) applyCurrentDsp(graph);
+    else if (needsWebAudioGraph()) syncAutomix();
+  },
+
+  setDirectSourceStream(directSourceStream) {
+    set({ directSourceStream });
+    saveSettings(get());
+  },
+
+  setStreamingQuality(streamingQuality) {
+    set({ streamingQuality });
+    saveSettings(get());
   },
 }));
 

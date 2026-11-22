@@ -1,3 +1,4 @@
+import { AudioLines } from 'lucide-react';
 import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import {
@@ -32,6 +33,7 @@ export function PlayerBar() {
   const sidePanel = useUi((s) => s.sidePanel);
   const toggleSidePanel = useUi((s) => s.toggleSidePanel);
   const closeSidePanel = useUi((s) => s.closeSidePanel);
+  const setAudioOutputOpen = useUi((s) => s.setAudioOutputOpen);
   const hasTrack = usePlayer((s) => s.nowPlaying !== null);
   const videoId = usePlayer((s) => s.nowPlaying?.videoId ?? null);
   const track = usePlayer((s) => {
@@ -116,6 +118,14 @@ export function PlayerBar() {
             onClick={handleToggleLyrics}
           >
             {onLyricsPage ? <LyricsActiveIcon size={18} /> : <LyricsIcon size={18} />}
+          </button>
+          <button
+            className={fading}
+            aria-label="Audio output"
+            title="Audio output & Signal Path"
+            onClick={() => setAudioOutputOpen(true)}
+          >
+            <AudioLines size={17} strokeWidth={2} aria-hidden="true" />
           </button>
           <button
             className={fading}

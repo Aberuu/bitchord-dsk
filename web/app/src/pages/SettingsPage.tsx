@@ -1,440 +1,413 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { ChevronRight, Clock, Radio, RefreshCw, SlidersHorizontal, Users } from 'lucide-react';
-import { lazy, Suspense, useState, type ComponentType, type ReactNode } from 'react';
-import { SiApplemusic, SiDiscord, SiSpotify, SiYoutubemusic } from 'react-icons/si';
+import {
+  Archive,
+  AudioLines,
+  ChevronRight,
+  CircleArrowDown,
+  CirclePlay,
+  FileMusic,
+  MessageSquareQuote,
+  Paintbrush,
+  Puzzle,
+  Search,
+  SlidersHorizontal,
+  Speaker,
+  User,
+  Users,
+  Wifi,
+  X,
+} from 'lucide-react';
+import { lazy, Suspense, useMemo, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router';
 import { PageHeader } from '@/components/PageHeader';
 import { PrefetchLink } from '@/components/PrefetchLink';
-import { Select } from '@/components/Select';
-import { desktopApi, isTauriDesktop } from '@/desktop/tauriBridge';
-import { useDiscord } from '@/extension/useDiscord';
-import { useExtension } from '@/extension/useExtension';
+import { getBootstrapSnapshot } from '@/desktop/tauriBridge';
+import { useAudioPipeline } from '@/desktop/useAudioPipeline';
 import { useYtAuth } from '@/extension/useYtAuth';
-import { queryClient } from '@/lib/queryClient';
 import { useParty } from '@/party/useParty';
-import { AUTOMIX_BARS } from '@/playback/automix/choices';
-import { useHistorySettings } from '@/playback/historyReporting';
-import { CROSSFADE_CHOICES, usePlayer } from '@/state/player';
-import { useUi, type ThemePreference } from '@/state/ui';
-import {
-  AppleMusicIntegration,
-  AppleMusicToggles,
-  CanvasToggle,
-  LyricSourcesAccess,
-  SpotifyIntegration,
-  Toggle,
-} from './IntegrationSettings';
+import { usePlayer, type StreamingQuality } from '@/state/player';
+import { useUi } from '@/state/ui';
 import { settingsUi } from './settingsStyles';
 
 const LyricsSettings = lazy(() => import('@/shell/LyricsSettings').then((m) => ({ default: m.LyricsSettings })));
 
-function Glyph({ Icon, color, ink }: { Icon: ComponentType<{ size?: number }>; color: string; ink?: string }) {
-  return (
-    <span className={settingsUi.integrationIcon} style={{ backgroundColor: color, ...(ink && { color: ink }) }}>
-      <Icon size={15} />
-    </span>
-  );
+interface SearchEntry {
+  id: string;
+  title: string;
+  subtitle: string;
+  keywords: string;
+  to?: string;
+  action?: () => void;
 }
 
-function LinkRow({ to, icon, title, value }: { to: string; icon?: ReactNode; title: string; value?: string | null }) {
-  return (
-    <PrefetchLink to={to} className={`${icon ? settingsUi.integration : settingsUi.integrationPlain} ${settingsUi.linkRow}`}>
-      {icon}
-      <span className={settingsUi.integrationName}>{title}</span>
-      <span className={settingsUi.value}>
-        {value}
-        <ChevronRight size={16} aria-hidden="true" />
-      </span>
-    </PrefetchLink>
-  );
-}
-
-function youtubeText(auth: ReturnType<typeof useYtAuth>): string {
-  if (auth.state === 'checking') return 'Checking…';
-  if (auth.state === 'unavailable') return 'Unavailable';
-  const { browserSignedIn, connected, active } = auth.auth;
-  if (!browserSignedIn) return 'Not signed in';
-  if (!connected) return 'Disconnected';
-  return active ? active.name : 'Signed in';
-}
-
-function ScrobblingSection() {
-  const [lbToken, setLbToken] = useState('');
-  const [lfmKey, setLfmKey] = useState('');
-  const [lfmSecret, setLfmSecret] = useState('');
-  const [pendingToken, setPendingToken] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState<string | null>(null);
-
-  const stateQuery = useQuery({
-    queryKey: ['desktop', 'scrobble'],
-    queryFn: () => desktopApi.scrobbleGetState(),
-  });
-
-  const save = useMutation({
-    mutationFn: desktopApi.scrobbleUpdateConfig,
-    onSuccess: (next) => {
-      queryClient.setQueryData(['desktop', 'scrobble'], next);
-      setFeedback('Scrobbling settings saved.');
-    },
-    onError: (err) => setFeedback(String(err)),
-  });
-
-  const startLfm = useMutation({
-    mutationFn: () => desktopApi.scrobbleLastfmStart(),
-    onSuccess: (res) => {
-      setPendingToken(res.token);
-      window.open(res.authUrl, '_blank', 'noreferrer');
-      setFeedback('Approve BitChord in the browser tab, then click Complete Last.fm Sign-In.');
-    },
-    onError: (err) => setFeedback(String(err)),
-  });
-
-  const finishLfm = useMutation({
-    mutationFn: (tok: string) => desktopApi.scrobbleLastfmFinish(tok),
-    onSuccess: (next) => {
-      queryClient.setQueryData(['desktop', 'scrobble'], next);
-      setPendingToken(null);
-      setFeedback(`Connected Last.fm as ${next.lastfmUsername ?? 'your account'}.`);
-    },
-    onError: (err) => setFeedback(String(err)),
-  });
-
-  const disconnectLfm = useMutation({
-    mutationFn: () => desktopApi.scrobbleDisconnectLastfm(),
-    onSuccess: (next) => {
-      queryClient.setQueryData(['desktop', 'scrobble'], next);
-      setFeedback('Disconnected from Last.fm.');
-    },
-  });
-
-  const st = stateQuery.data;
-
-  return (
+function HubRow({
+  to,
+  onClick,
+  icon,
+  title,
+  subtitle,
+  badge,
+  value,
+}: {
+  to?: string;
+  onClick?: () => void;
+  icon: ReactNode;
+  title: string;
+  subtitle?: string | null;
+  badge?: string | null;
+  value?: string | null;
+}) {
+  const inner = (
     <>
-      <h2 className={settingsUi.sectionHeader}>Scrobbling</h2>
-      <section className={settingsUi.group}>
-        <div className={settingsUi.integration}>
-          <Glyph Icon={Radio} color="#d51007" />
-          <span className={settingsUi.integrationName}>Last.fm / Libre.fm</span>
-          <span className={settingsUi.value}>
-            <span>{st?.lastfmConnected ? `Signed in as ${st.lastfmUsername}` : st?.lastfmConfigured ? 'API keys saved' : 'Not configured'}</span>
-            {st?.lastfmConnected ? (
-              <button type="button" className={settingsUi.inlineButton} onClick={() => disconnectLfm.mutate()}>
-                Disconnect
-              </button>
-            ) : pendingToken ? (
-              <button type="button" className={settingsUi.inlineButton} onClick={() => finishLfm.mutate(pendingToken)}>
-                Complete Sign-In
-              </button>
-            ) : st?.lastfmConfigured ? (
-              <button type="button" className={settingsUi.inlineButton} onClick={() => startLfm.mutate()}>
-                Connect
-              </button>
-            ) : null}
-          </span>
-        </div>
-
-        <form
-          className="flex flex-col gap-2.5 px-4 py-3 hairline-[16px]"
-          onSubmit={(e) => {
-            e.preventDefault();
-            save.mutate({
-              ...(lfmKey.trim() && { lastfmApiKey: lfmKey.trim() }),
-              ...(lfmSecret.trim() && { lastfmApiSecret: lfmSecret.trim() }),
-              ...(lbToken.trim() && { listenbrainzToken: lbToken.trim() }),
-            });
-            setLfmKey('');
-            setLfmSecret('');
-            setLbToken('');
-          }}
-        >
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <label className="flex flex-col gap-1">
-              <span className="type-callout text-secondary">Last.fm API Key</span>
-              <input
-                type="text"
-                className="rounded-[8px] border-0 bg-quaternary px-2.5 py-1.5 type-body text-primary"
-                placeholder={st?.lastfmConfigured ? 'Configured (enter to replace)' : 'Paste API key'}
-                value={lfmKey}
-                onChange={(e) => setLfmKey(e.currentTarget.value)}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="type-callout text-secondary">Last.fm Shared Secret</span>
-              <input
-                type="password"
-                className="rounded-[8px] border-0 bg-quaternary px-2.5 py-1.5 type-body text-primary"
-                placeholder={st?.lastfmConfigured ? 'Configured (enter to replace)' : 'Paste shared secret'}
-                value={lfmSecret}
-                onChange={(e) => setLfmSecret(e.currentTarget.value)}
-              />
-            </label>
-          </div>
-          <label className="flex flex-col gap-1">
-            <span className="type-callout text-secondary">ListenBrainz User Token</span>
-            <input
-              type="password"
-              className="rounded-[8px] border-0 bg-quaternary px-2.5 py-1.5 type-body text-primary"
-              placeholder={st?.listenbrainzConnected ? 'Token saved in Windows vault (enter to replace)' : 'Paste ListenBrainz token'}
-              value={lbToken}
-              onChange={(e) => setLbToken(e.currentTarget.value)}
-            />
-          </label>
-          <div className="flex items-center justify-between pt-1">
-            <span className="type-callout text-secondary">
-              {st?.listenbrainzConnected ? 'ListenBrainz connected' : 'ListenBrainz not connected'}
+      <span className={settingsUi.iconPlain}>{icon}</span>
+      <span className={settingsUi.rowText}>
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate type-title-3 text-primary">{title}</span>
+          {badge && (
+            <span className="shrink-0 whitespace-nowrap rounded-[6px] bg-quaternary px-1.5 py-0.5 text-[10px] font-semibold tracking-[0.04em] text-secondary uppercase">
+              {badge}
             </span>
-            <button
-              type="submit"
-              disabled={!lfmKey.trim() && !lfmSecret.trim() && !lbToken.trim()}
-              className="cursor-pointer rounded-pill bg-key-bg px-3.5 py-1.5 type-callout-emphasized text-white disabled:opacity-45"
-            >
-              Save Credentials
-            </button>
-          </div>
-        </form>
-
-        <Toggle
-          label="Scrobble Primary Artist Only"
-          detail="Strips featured artists so scrobbles group under the main artist."
-          checked={st?.primaryArtistOnly ?? false}
-          onChange={(primaryArtistOnly) => save.mutate({ primaryArtistOnly })}
-        />
-      </section>
-      {feedback && <p className={settingsUi.footer}>{feedback}</p>}
+          )}
+        </span>
+        {subtitle && <span className={settingsUi.rowDetail}>{subtitle}</span>}
+      </span>
+      <span className={settingsUi.value}>
+        {value && <span>{value}</span>}
+        <ChevronRight size={17} className="text-tertiary" aria-hidden="true" />
+      </span>
     </>
   );
+
+  if (to) {
+    return (
+      <PrefetchLink to={to} className={`${settingsUi.integration} ${settingsUi.linkRow}`}>
+        {inner}
+      </PrefetchLink>
+    );
+  }
+  return (
+    <button type="button" onClick={onClick} className={`${settingsUi.integration} ${settingsUi.linkRow}`}>
+      {inner}
+    </button>
+  );
+}
+
+function qualityLabel(q: StreamingQuality): string {
+  if (q === 'lossless') return 'Lossless';
+  if (q === 'high') return 'High';
+  return 'Normal';
 }
 
 export default function SettingsPage() {
-  const desktop = isTauriDesktop();
-  const extension = useExtension();
+  const navigate = useNavigate();
+  const [query, setQuery] = useState('');
+  const [lyricsOpen, setLyricsOpen] = useState(false);
+
   const yt = useYtAuth();
-  const discord = useDiscord();
   const party = useParty();
-  const theme = useUi((s) => s.theme);
-  const setTheme = useUi((s) => s.setTheme);
-  const minimizeToTray = useUi((s) => s.minimizeToTray);
-  const setMinimizeToTray = useUi((s) => s.setMinimizeToTray);
+  const pipeline = useAudioPipeline();
+  const setPipelineOpen = useUi((s) => s.setAudioPipelineOpen);
+  const directSourceStream = usePlayer((s) => s.directSourceStream);
+  const streamingQuality = usePlayer((s) => s.streamingQuality);
+  const spatialAudio = usePlayer((s) => s.spatialAudio);
+  const { setDirectSourceStream, setSpatialAudio } = usePlayer.getState();
 
-  const autoplay = usePlayer((s) => s.autoplay);
-  const crossfadeSec = usePlayer((s) => s.crossfadeSec);
-  const automix = usePlayer((s) => s.automix);
-  const automixBars = usePlayer((s) => s.automixBars);
-  const showNerdStats = usePlayer((s) => s.showNerdStats);
-  const shareHistory = useHistorySettings((s) => s.share);
-  const setShareHistory = useHistorySettings((s) => s.setShare);
-  const { setAutoplay, setCrossfade, setAutomix, setAutomixBars, setShowNerdStats } = usePlayer.getState();
+  const activeAccount = yt.state === 'ready' ? yt.auth.active : null;
+  const accountSubtitle =
+    yt.state === 'checking'
+      ? 'Checking account…'
+      : activeAccount?.handle || activeAccount?.name || 'YouTube Music, Spotify, Discord & Scrobbling';
 
-  const [lyrics, setLyrics] = useState(false);
-  const updateCheck = useMutation({ mutationFn: () => desktopApi.checkForUpdates() });
+  const version = getBootstrapSnapshot()?.version ?? '0.1.0';
 
-  const present = extension.state === 'present';
-  const discordText =
-    discord.state === 'ready' && discord.discord.connected
-      ? discord.discord.enabled
-        ? 'On'
-        : 'Off'
-      : discord.state === 'ready' && discord.discord.available
-        ? 'Not connected'
-        : null;
+  const searchIndex = useMemo<SearchEntry[]>(
+    () => [
+      {
+        id: 'account',
+        title: 'Account & integrations',
+        subtitle: 'YouTube Music, Spotify, Discord, Last.fm, ListenBrainz, Apple Music',
+        keywords: 'account sign in youtube spotify discord scrobble lastfm listenbrainz apple music canvas',
+        to: '/settings/integrations',
+      },
+      {
+        id: 'party',
+        title: 'Listen together',
+        subtitle: 'Share a code and play the same music, in time',
+        keywords: 'party sync room invite code friends listen together',
+        to: '/settings/listen-together',
+      },
+      {
+        id: 'quality',
+        title: 'Audio Quality & Sources',
+        subtitle: 'Direct source stream, Lossless streaming, source priority',
+        keywords: 'audio quality lossless high normal bitrate direct stream sources',
+        to: '/settings/quality',
+      },
+      {
+        id: 'playback',
+        title: 'Playback',
+        subtitle: 'Output precision, WASAPI bit-perfect, loudness, crossfade, automix, spatial audio',
+        keywords: 'playback output precision 16-bit 32-bit float dac usb wasapi exclusive crossfade automix silence spatial speed sleep timer',
+        to: '/settings/playback',
+      },
+      {
+        id: 'equalizer',
+        title: 'Equalizer',
+        subtitle: 'Dynamic 2D Tone Pad, 7-band curve, 16 presets, channel balance',
+        keywords: 'eq equalizer tone pad bands presets bass vocal balance curve frequency',
+        to: '/settings/audio',
+      },
+      {
+        id: 'pipeline',
+        title: 'Audio Pipeline',
+        subtitle: `Live signal path (${pipeline.shortSubtitle})`,
+        keywords: 'pipeline signal path decoder resampler dsp bit exact output device wasapi',
+        action: () => setPipelineOpen(true),
+      },
+      {
+        id: 'appearance',
+        title: 'Appearance',
+        subtitle: 'Light / Dark theme, Match Windows, tray behavior, Stats for Nerds, updates',
+        keywords: 'theme dark light appearance system tray nerd stats updates',
+        to: '/settings/appearance',
+      },
+      {
+        id: 'downloads',
+        title: 'Downloads',
+        subtitle: 'Offline saved songs on this PC',
+        keywords: 'downloads offline cache saved songs',
+        to: '/library/downloads',
+      },
+      {
+        id: 'local',
+        title: 'Local Music',
+        subtitle: 'Local folders, FLAC/MP3/WAV scanner',
+        keywords: 'local music files folders flac mp3 wav scan',
+        to: '/library/local',
+      },
+      {
+        id: 'data',
+        title: 'Your data & Replay',
+        subtitle: 'Listening cards, Top Songs, Import & Export JSON backup, Poster PNG',
+        keywords: 'data backup export import json replay stats listening history cards poster',
+        to: '/library',
+      },
+      {
+        id: 'lyrics',
+        title: 'Lyric Sources',
+        subtitle: 'Provider priority order, syllable timing, lyric providers',
+        keywords: 'lyrics providers lrc lrclib musixmatch genius betterlyrics syllables',
+        action: () => setLyricsOpen(true),
+      },
+    ],
+    [pipeline.shortSubtitle, setPipelineOpen],
+  );
+
+  const trimmed = query.trim().toLowerCase();
+  const filtered = useMemo(() => {
+    if (!trimmed) return [];
+    return searchIndex.filter(
+      (entry) =>
+        entry.title.toLowerCase().includes(trimmed) ||
+        entry.subtitle.toLowerCase().includes(trimmed) ||
+        entry.keywords.includes(trimmed),
+    );
+  }, [searchIndex, trimmed]);
 
   return (
     <div className={settingsUi.centered}>
       <PageHeader title="Settings" />
       <div className={settingsUi.body}>
-        <h2 className={settingsUi.sectionHeader}>Appearance & Desktop</h2>
-        <section className={settingsUi.group}>
-          <label className={settingsUi.controlRow}>
-            <span>Appearance</span>
-            <Select<ThemePreference>
-              label="Appearance"
-              value={theme}
-              options={[
-                { value: 'system', label: 'Match Windows' },
-                { value: 'light', label: 'Light' },
-                { value: 'dark', label: 'Dark' },
-              ]}
-              onChange={setTheme}
-            />
-          </label>
-          {desktop && (
-            <>
-              <Toggle
-                label="Minimize to System Tray on Close"
-                detail="Keep music playing in the background when you close the main window."
-                checked={minimizeToTray}
-                onChange={setMinimizeToTray}
+        {/* Search settings field matching Screenshot 1 */}
+        <div className="relative mb-5">
+          <Search
+            size={16}
+            strokeWidth={2.2}
+            className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-secondary"
+            aria-hidden="true"
+          />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.currentTarget.value)}
+            placeholder="Search settings"
+            aria-label="Search settings"
+            className="h-10 w-full rounded-[14px] border border-search-border/60 bg-quinary pr-9 pl-10 type-body-reduced text-primary placeholder:text-tertiary [&::-webkit-search-cancel-button]:hidden"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery('')}
+              aria-label="Clear settings search"
+              className="absolute top-1/2 right-2.5 grid size-5 -translate-y-1/2 place-items-center rounded-full bg-tertiary text-page"
+            >
+              <X size={12} strokeWidth={3} aria-hidden="true" />
+            </button>
+          )}
+        </div>
+
+        {trimmed ? (
+          <section className={settingsUi.group} aria-label="Settings search results">
+            {filtered.length === 0 ? (
+              <div className="px-4 py-6 text-center">
+                <p className="type-body-emphasized text-primary">No matching settings</p>
+                <p className="mt-1 type-callout text-secondary">
+                  Try searching for Playback, Equalizer, Audio Pipeline, Theme, or Backup.
+                </p>
+              </div>
+            ) : (
+              filtered.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    if (item.action) item.action();
+                    else if (item.to) void navigate(item.to);
+                  }}
+                  className={`${settingsUi.integrationPlain} ${settingsUi.linkRow}`}
+                >
+                  <span className={settingsUi.rowText}>
+                    <span className="type-title-3 text-primary">{item.title}</span>
+                    <span className={settingsUi.rowDetail}>{item.subtitle}</span>
+                  </span>
+                  <ChevronRight size={17} className="text-tertiary" aria-hidden="true" />
+                </button>
+              ))
+            )}
+          </section>
+        ) : (
+          <>
+            {/* Top profile & Listen Together card matching Screenshot 1 */}
+            <section className={settingsUi.group} aria-label="Account and social">
+              <HubRow
+                to="/settings/integrations"
+                icon={
+                  activeAccount?.avatarUrl ? (
+                    <img
+                      src={activeAccount.avatarUrl}
+                      alt=""
+                      width={26}
+                      height={26}
+                      referrerPolicy="no-referrer"
+                      className="size-[26px] rounded-full object-cover"
+                    />
+                  ) : (
+                    <span className="grid size-[26px] place-items-center rounded-full bg-quaternary text-primary">
+                      <User size={15} aria-hidden="true" />
+                    </span>
+                  )
+                }
+                title="Account & integrations"
+                subtitle={accountSubtitle}
               />
-              <div className={settingsUi.row}>
-                <span className={settingsUi.rowText}>
-                  <span>App Updates</span>
-                  <span className={settingsUi.rowDetail}>
-                    {updateCheck.data?.notes ?? 'Check for stream-resolver and desktop fixes.'}
+              <HubRow
+                to="/settings/listen-together"
+                icon={<Users size={20} strokeWidth={1.9} aria-hidden="true" />}
+                title="Listen together"
+                subtitle={party.code ? `Connected to party ${party.code}` : 'Share a code and play the same music, in time'}
+              />
+            </section>
+
+            {/* AUDIO QUALITY section matching Screenshot 1 */}
+            <h2 className={settingsUi.sectionHeader}>Audio Quality</h2>
+            <section className={settingsUi.group} aria-label="Audio quality">
+              <HubRow
+                to="/settings/quality"
+                icon={<Puzzle size={20} strokeWidth={1.9} aria-hidden="true" />}
+                title="Sources"
+                subtitle="Where audio comes from and the order used"
+              />
+              <label className={settingsUi.controlRow}>
+                <span className="pl-[40px] type-title-3 text-primary">Direct Source Stream</span>
+                <input
+                  type="checkbox"
+                  className={settingsUi.switch}
+                  checked={directSourceStream}
+                  onChange={(e) => setDirectSourceStream(e.currentTarget.checked)}
+                />
+              </label>
+              <HubRow
+                to="/settings/quality"
+                icon={<Wifi size={20} strokeWidth={1.9} aria-hidden="true" />}
+                title="On Desktop"
+                badge="IN USE"
+                value={qualityLabel(streamingQuality)}
+              />
+              <label className={settingsUi.controlRow}>
+                <span className="flex min-w-0 flex-1 items-start gap-3.5">
+                  <span className={`${settingsUi.iconPlain} mt-0.5`}>
+                    <Speaker size={20} strokeWidth={1.9} aria-hidden="true" />
+                  </span>
+                  <span className={settingsUi.rowText}>
+                    <span>Spatial Audio</span>
+                    <span className={settingsUi.rowDetail}>
+                      Play the wider, immersive stereo mix when enabled.
+                    </span>
                   </span>
                 </span>
-                <button
-                  type="button"
-                  className={settingsUi.inlineButton}
-                  disabled={updateCheck.isPending}
-                  onClick={() => updateCheck.mutate()}
-                >
-                  <span className="inline-flex items-center gap-1">
-                    <RefreshCw size={12} className={updateCheck.isPending ? 'animate-spin' : undefined} aria-hidden="true" />
-                    {updateCheck.isPending ? 'Checking…' : 'Check Now'}
-                  </span>
-                </button>
-              </div>
-            </>
-          )}
-        </section>
+                <input
+                  type="checkbox"
+                  className={settingsUi.switch}
+                  checked={spatialAudio}
+                  onChange={(e) => setSpatialAudio(e.currentTarget.checked)}
+                />
+              </label>
+            </section>
 
-        <h2 className={settingsUi.sectionHeader}>Account & Integrations</h2>
-        <section className={settingsUi.group}>
-          <div className={settingsUi.integration}>
-            <Glyph Icon={SiYoutubemusic} color="#ffffff" ink="#ff0033" />
-            <span className={settingsUi.integrationName}>YouTube Music</span>
-            <span className={settingsUi.value}>
-              <span>{youtubeText(yt)}</span>
-              {desktop && (
-                <button
-                  type="button"
-                  className={settingsUi.inlineButton}
-                  onClick={() =>
-                    yt.state === 'ready' && yt.auth.signedIn
-                      ? void desktopApi.signOutYt()
-                      : void desktopApi.openYtSignIn()
-                  }
-                >
-                  {yt.state === 'ready' && yt.auth.signedIn ? 'Sign Out' : 'Sign In'}
-                </button>
-              )}
-            </span>
-          </div>
-          <div className={settingsUi.integration}>
-            <Glyph Icon={SiSpotify} color="#1ed760" />
-            <span className={settingsUi.integrationName}>Spotify</span>
-            {present ? <SpotifyIntegration /> : <span className={settingsUi.value}>Unavailable</span>}
-          </div>
-          {present && discord.state === 'ready' && discord.discord.available && (
-            <LinkRow to="/settings/discord" icon={<Glyph Icon={SiDiscord} color="#5865f2" />} title="Discord" value={discordText} />
-          )}
-        </section>
-
-        <section className={`${settingsUi.group} mt-3 empty:hidden`}>
-          <Toggle
-            label="Share Listening Activity to YouTube"
-            detail="Songs you play here go to your YouTube Music history and shape its recommendations."
-            checked={shareHistory}
-            onChange={setShareHistory}
-          />
-          <CanvasToggle />
-        </section>
-
-        {desktop && <ScrobblingSection />}
-
-        <h2 className={settingsUi.sectionHeader}>Apple Music</h2>
-        <section className={settingsUi.group}>
-          {!desktop && (
-            <div className={settingsUi.integration}>
-              <Glyph Icon={SiApplemusic} color="#fa2d48" />
-              <span className={settingsUi.integrationName}>Extension Access</span>
-              {present ? <AppleMusicIntegration /> : <span className={settingsUi.value}>Needs the extension</span>}
-            </div>
-          )}
-          <AppleMusicToggles />
-        </section>
-        <p className={settingsUi.footer}>From Apple Music public pages. No Apple Music account or sign-in needed.</p>
-
-        <h2 className={settingsUi.sectionHeader}>Replay & Listening Stats</h2>
-        <section className={settingsUi.group}>
-          <LinkRow
-            to="/replay"
-            icon={<Glyph Icon={Clock} color="#d60017" />}
-            title="Your Listening Experience (Replay)"
-            value="Cards, charts, backup JSON & poster PNG"
-          />
-        </section>
-
-        <h2 className={settingsUi.sectionHeader}>Listen Together</h2>
-        <section className={settingsUi.group}>
-          <LinkRow
-            to="/settings/listen-together"
-            icon={<Glyph Icon={Users} color="#fa2d48" />}
-            title="Listen Together"
-            value={party.code ? `In party ${party.code}` : 'Self-hosted party sync'}
-          />
-        </section>
-
-        <h2 className={settingsUi.sectionHeader}>Playback & Audio</h2>
-        <section className={settingsUi.group}>
-          <LinkRow
-            to="/settings/audio"
-            icon={<Glyph Icon={SlidersHorizontal} color="#3a3a3c" />}
-            title="Audio Output, Bit-Perfect & Equalizer"
-            value="WASAPI, Speed, Sleep Timer, EQ"
-          />
-          <Toggle
-            label="AutoPlay"
-            detail="When the queue ends, keep playing similar music."
-            checked={autoplay}
-            onChange={setAutoplay}
-          />
-          <label className={settingsUi.controlRow}>
-            <span>Crossfade</span>
-            <Select<number | 'automix'>
-              label="Crossfade"
-              value={automix ? 'automix' : crossfadeSec}
-              options={[
-                ...CROSSFADE_CHOICES.map((seconds) => ({ value: seconds, label: seconds === 0 ? 'Off' : `${seconds} seconds` })),
-                { value: 'automix', label: 'Automix' },
-              ]}
-              onChange={(value) => (value === 'automix' ? setAutomix(true) : setCrossfade(value))}
-            />
-          </label>
-          {automix && (
-            <label className={settingsUi.controlRow}>
-              <span>Blend Length</span>
-              <Select
-                label="Blend Length"
-                value={automixBars}
-                options={AUTOMIX_BARS.map((bars) => ({ value: bars, label: `Up to ${bars} bars` }))}
-                onChange={setAutomixBars}
+            {/* Grouped Category List matching Screenshot 1 & 2 */}
+            <section className={`${settingsUi.group} mt-6`} aria-label="General settings">
+              <HubRow
+                to="/library/downloads"
+                icon={<CircleArrowDown size={20} strokeWidth={1.9} aria-hidden="true" />}
+                title="Downloads"
               />
-            </label>
-          )}
-          <Toggle
-            label="Show Stats for Nerds"
-            detail="Codec, bitrate, sample rate, and bit-perfect status under the artist in the full-screen player."
-            checked={showNerdStats}
-            onChange={setShowNerdStats}
-          />
-        </section>
-        {automix && (
-          <p className={settingsUi.footer}>
-            Automix detects tempo, key, and phrases, then blends on the beat with pitch-preserved time stretching. Based on AutoMix by David Finnegan (AGPL-3.0).
-          </p>
-        )}
+              <HubRow
+                to="/settings/playback"
+                icon={<CirclePlay size={20} strokeWidth={1.9} aria-hidden="true" />}
+                title="Playback"
+              />
+              <HubRow
+                to="/settings/audio"
+                icon={<SlidersHorizontal size={20} strokeWidth={1.9} aria-hidden="true" />}
+                title="Equalizer"
+              />
+              <HubRow
+                to="/settings/appearance"
+                icon={<Paintbrush size={20} strokeWidth={1.9} aria-hidden="true" />}
+                title="Appearance"
+              />
+              <HubRow
+                to="/library/local"
+                icon={<FileMusic size={20} strokeWidth={1.9} aria-hidden="true" />}
+                title="Local Music"
+              />
+              <HubRow
+                onClick={() => setPipelineOpen(true)}
+                icon={<AudioLines size={20} strokeWidth={1.9} aria-hidden="true" />}
+                title="Audio Pipeline"
+                value={pipeline.shortSubtitle}
+              />
+              <HubRow
+                to="/library"
+                icon={<Archive size={20} strokeWidth={1.9} aria-hidden="true" />}
+                title="Your data"
+              />
+              <HubRow
+                onClick={() => setLyricsOpen(true)}
+                icon={<MessageSquareQuote size={20} strokeWidth={1.9} aria-hidden="true" />}
+                title="Lyric Sources"
+              />
+            </section>
 
-        <h2 className={settingsUi.sectionHeader}>Lyrics</h2>
-        <section className={settingsUi.group}>
-          <button type="button" className={`${settingsUi.integrationPlain} ${settingsUi.linkRow}`} onClick={() => setLyrics(true)}>
-            <span className={settingsUi.integrationName}>Lyric Sources</span>
-            <span className={settingsUi.value}>
-              Order, sources, syllable timing
-              <ChevronRight size={16} aria-hidden="true" />
-            </span>
-          </button>
-          {!desktop && (
-            <div className={settingsUi.integrationPlain}>
-              <span className={settingsUi.integrationName}>Lyric Sources Access</span>
-              {present ? <LyricSourcesAccess /> : <span className={settingsUi.value}>Needs the extension</span>}
-            </div>
-          )}
-        </section>
+            <footer className="mt-7 flex items-center justify-center gap-3 type-callout text-tertiary">
+              <span>bitchord desktop {version}</span>
+            </footer>
+          </>
+        )}
       </div>
-      {lyrics && (
+
+      {lyricsOpen && (
         <Suspense fallback={null}>
-          <LyricsSettings onClose={() => setLyrics(false)} />
+          <LyricsSettings onClose={() => setLyricsOpen(false)} />
         </Suspense>
       )}
     </div>

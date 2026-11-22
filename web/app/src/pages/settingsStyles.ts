@@ -1,31 +1,28 @@
 /*
- * Grouped inset rows, the settings idiom the app uses elsewhere: the
- * Extension, Settings, Discord and Listen Together pages.
+ * Grouped inset rows matching BitChord's rounded card idiom across
+ * Settings Hub, Playback, Equalizer, Integrations, and Listen Together.
  */
 
-const row = 'relative flex items-center justify-between px-4 py-[11px] type-title-3 hairline-[16px]';
-const integration = 'relative grid items-center gap-x-3 px-4 py-[11px] type-title-3 hairline-[52px]';
-const field = 'w-[220px] flex-none rounded-[8px] border-0 bg-quaternary px-2.5 py-[5px] type-body text-primary';
+const row = 'relative flex items-center justify-between px-4 py-[13px] type-title-3 hairline-[16px]';
+const integration = 'relative grid items-center gap-x-3.5 px-4 py-[13px] type-title-3 hairline-[56px]';
+const field = 'w-[220px] flex-none rounded-[10px] border-0 bg-quaternary px-3 py-1.5 type-body text-primary';
 
 export const settingsUi = {
-  /** The page title and its rows as one column, centred in the page. */
-  centered: 'mx-auto max-w-[calc(640px+2*var(--body-gutter))]',
-  body: 'mx-(--body-gutter) mt-5 mb-[120px] max-w-[640px]',
-  group: 'overflow-hidden rounded-[10px] bg-quinary',
-  sectionHeader: 'mx-4 mt-7 mb-2 type-subhead-emphasized uppercase text-secondary',
+  centered: 'mx-auto max-w-[calc(680px+2*var(--body-gutter))]',
+  body: 'mx-(--body-gutter) mt-4 mb-[140px] max-w-[680px]',
+  group: 'overflow-hidden rounded-[16px] bg-quinary',
+  sectionHeader: 'mx-4 mt-7 mb-2 type-subhead-emphasized tracking-[0.04em] uppercase text-secondary',
   footer: 'mx-4 mt-2 type-callout text-secondary',
 
   row,
-  /** A row holding a switch, a select or a field: the whole row is its label. */
   controlRow: `${row} cursor-pointer gap-4`,
-  rowText: 'flex flex-col gap-0.5',
+  rowText: 'flex min-w-0 flex-1 flex-col gap-0.5',
   rowDetail: 'type-callout text-secondary',
-  value: 'inline-flex items-center gap-1.5 text-right type-body-reduced text-secondary',
+  value: 'inline-flex flex-none items-center gap-1.5 text-right type-body-reduced text-secondary',
   dot: 'size-2 rounded-full bg-green',
 
-  /** Download rows: browser logo, title and detail, chevron. */
   download:
-    'relative grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-x-4 px-4 py-[11px] hover:bg-quinary hairline-[60px]',
+    'relative grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-x-4 px-4 py-[12px] hover:bg-quinary hairline-[60px]',
   updateDot: 'size-2.5 justify-self-center rounded-full bg-key',
   downloadText: 'flex min-w-0 flex-col gap-0.5',
   downloadTitle: 'type-title-3-emphasized text-key',
@@ -33,21 +30,18 @@ export const settingsUi = {
   chevron: 'text-tertiary',
   steps: 'mx-4 mt-2.5 list-decimal ps-[18px] type-body-tall text-secondary [&>li+li]:mt-1',
 
-  /** Integration rows: a coloured app-icon square, the name, the state. */
-  integration: `${integration} grid-cols-[24px_minmax(0,1fr)_auto]`,
-  /** An integration row without the icon square. */
+  integration: `${integration} grid-cols-[26px_minmax(0,1fr)_auto]`,
   integrationPlain: `${integration} grid-cols-[minmax(0,1fr)_auto]`,
-  integrationIcon: 'grid size-6 place-items-center rounded-[6px] text-white',
+  integrationIcon: 'grid size-[26px] place-items-center rounded-[7px] text-white',
+  iconPlain: 'grid size-[26px] place-items-center text-primary',
   integrationName: 'min-w-0',
-  /** Settings: an integration row that opens a page of its own. */
-  linkRow: 'w-full cursor-pointer text-start hover:bg-quaternary',
-  /** A row's own action, after its status (Connect, Disconnect). */
-  inlineButton: 'ml-2 rounded-[12px] bg-quaternary px-2.5 py-[3px] type-callout-emphasized text-primary disabled:opacity-50',
+  linkRow: 'w-full cursor-pointer text-start transition-colors hover:bg-tracklist-hover',
+  inlineButton: 'ml-2 rounded-pill bg-quaternary px-3 py-1 type-callout-emphasized text-primary transition-colors hover:bg-tracklist-hover disabled:opacity-50',
   inlineLink: 'text-key',
 
   switch: [
-    'relative h-[22px] w-[38px] flex-none cursor-pointer appearance-none rounded-[11px] bg-quaternary transition-[background-color] duration-200 checked:bg-green',
-    'after:absolute after:top-0.5 after:left-0.5 after:size-[18px] after:rounded-full after:bg-white after:shadow-[0_1px_3px_rgb(0_0_0/0.3)] after:transition-[translate] after:duration-200 checked:after:translate-x-4',
+    'relative h-[26px] w-[46px] flex-none cursor-pointer appearance-none rounded-pill bg-quaternary transition-[background-color] duration-200 checked:bg-green',
+    'after:absolute after:top-[3px] after:left-[3px] after:size-[20px] after:rounded-full after:bg-white after:shadow-[0_1px_3px_rgb(0_0_0/0.35)] after:transition-[translate] after:duration-200 checked:after:translate-x-[20px]',
   ].join(' '),
   input: field,
 };

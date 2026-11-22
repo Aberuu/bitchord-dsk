@@ -2,6 +2,13 @@ import type { AudioSettings, EqualizerPresetId } from '@/desktop/tauriBridge';
 
 export type EqConfig = AudioSettings['eq'];
 
+export interface DspOptions {
+  eq: EqConfig;
+  balance: number;
+  spatialAudio: boolean;
+  loudnessNormalization: boolean;
+}
+
 export const BAND_LABELS = ['60 Hz', '150 Hz', '400 Hz', '1 kHz', '2.5 kHz', '6 kHz', '14 kHz'] as const;
 export const MANUAL_BANDS_HZ = [60, 150, 400, 1000, 2500, 6000, 14000] as const;
 
@@ -27,6 +34,10 @@ export const PRESET_MAP: Record<
   late_night: { label: 'Late Night', bands: [3, 1, 0, 1.5, 1, -1, -3] },
   custom: { label: 'Custom', bands: null },
 };
+
+export function presetLabel(preset: EqualizerPresetId): string {
+  return PRESET_MAP[preset]?.label ?? 'Flat';
+}
 
 export const DEFAULT_EQ_CONFIG: EqConfig = {
   enabled: false,
@@ -58,9 +69,9 @@ export const EQ_SLOTS: readonly FilterSlot[] = [
   { kind: 'highshelf', frequencyHz: 4000 },
 ];
 
+export const TONE_STEPS = 5;
 const MANUAL_Q = 1.0;
 const MANUAL_RANGE_DB = 12.0;
-const TONE_STEPS = 5;
 const TONE_DB_PER_STEP = 1.2;
 const MAKEUP_FRACTION = 0.5;
 const RESPONSE_POINTS = 96;
@@ -146,24 +157,47 @@ export function computeEqCurvePoints(cfg: EqConfig): [number, number][] {
   return computeEqCurve(cfg).points;
 }
 
+export function formatBalanceLabel(balance: number): string {
+  const pct = Math.round(clamp(balance, -1, 1) * 100);
+  if (Math.abs(pct) <= 2) return 'Center';
+  return pct < 0 ? `${Math.abs(pct)}% Left` : `${pct}% Right`;
+}
+
 export class WebAudioEqualizer {
   readonly input: GainNode;
   private readonly preamp: GainNode;
   private readonly filters: BiquadFilterNode[];
+  private readonly panner: StereoPannerNode;
+  private readonly splitter: ChannelSplitterNode;
+  private readonly merger: ChannelMergerNode;
+  private readonly ll: GainNode;
+  private readonly lr: GainNode;
+  private readonly rl: GainNode;
+  private readonly rr: GainNode;
   private readonly limiter: DynamicsCompressorNode;
 
   constructor(ctx: AudioContext) {
     this.input = new GainNode(ctx, { gain: 1 });
     this.preamp = new GainNode(ctx, { gain: 1 });
-    this.filters = EQ_SLOTS.map((slot) => {
-      const filter = new BiquadFilterNode(ctx, {
-        type: slot.kind === 'bell' ? 'peaking' : slot.kind,
-        frequency: slot.frequencyHz,
-        Q: 0.707,
-        gain: 0,
-      });
-      return filter;
-    });
+    this.filters = EQ_SLOTS.map(
+      (slot) =>
+        new BiquadFilterNode(ctx, {
+          type: slot.kind === 'bell' ? 'peaking' : slot.kind,
+          frequency: slot.frequencyHz,
+          Q: 0.707,
+          gain: 0,
+        }),
+    );
+
+    // M/S stereo width matrix: normal (100%) is identity [1,0; 0,1]; spatial widens side channel.
+    this.splitter = new ChannelSplitterNode(ctx, { numberOfOutputs: 2 });
+    this.merger = new ChannelMergerNode(ctx, { numberOfInputs: 2 });
+    this.ll = new GainNode(ctx, { gain: 1 });
+    this.lr = new GainNode(ctx, { gain: 0 });
+    this.rl = new GainNode(ctx, { gain: 0 });
+    this.rr = new GainNode(ctx, { gain: 1 });
+
+    this.panner = new StereoPannerNode(ctx, { pan: 0 });
     this.limiter = new DynamicsCompressorNode(ctx, {
       threshold: -0.5,
       knee: 0,
@@ -178,7 +212,19 @@ export class WebAudioEqualizer {
       prev.connect(f);
       prev = f;
     }
-    prev.connect(this.limiter);
+
+    prev.connect(this.splitter);
+    this.splitter.connect(this.ll, 0);
+    this.splitter.connect(this.lr, 1);
+    this.splitter.connect(this.rl, 0);
+    this.splitter.connect(this.rr, 1);
+    this.ll.connect(this.merger, 0, 0);
+    this.lr.connect(this.merger, 0, 0);
+    this.rl.connect(this.merger, 0, 1);
+    this.rr.connect(this.merger, 0, 1);
+
+    this.merger.connect(this.panner);
+    this.panner.connect(this.limiter);
     this.limiter.connect(ctx.destination);
   }
 
@@ -189,5 +235,29 @@ export class WebAudioEqualizer {
       this.filters[i]!.gain.value = cfg.enabled ? curve.gainsDb[i]! : 0;
       this.filters[i]!.Q.value = curve.qs[i]!;
     }
+  }
+
+  applyDsp(options: DspOptions): void {
+    const curve = computeEqCurve(options.eq);
+    // Apply half-peak EQ makeup attenuation and gentle -1.5 dB loudness ceiling headroom when enabled.
+    const eqPreamp = options.eq.enabled ? Math.pow(10, curve.preampDb / 20) : 1;
+    const loudnessScale = options.loudnessNormalization ? 0.92 : 1;
+    this.preamp.gain.value = eqPreamp * loudnessScale;
+
+    for (let i = 0; i < this.filters.length; i++) {
+      this.filters[i]!.gain.value = options.eq.enabled ? curve.gainsDb[i]! : 0;
+      this.filters[i]!.Q.value = curve.qs[i]!;
+    }
+
+    // Stereo width: w = 1.0 -> L'=L, R'=R; spatial w = 1.45 -> widened stereo field without clipping.
+    const width = options.spatialAudio ? 1.45 : 1.0;
+    const same = (1 + width) * 0.5;
+    const cross = (1 - width) * 0.5;
+    this.ll.gain.value = same;
+    this.rr.gain.value = same;
+    this.lr.gain.value = cross;
+    this.rl.gain.value = cross;
+
+    this.panner.pan.value = clamp(options.balance, -1, 1);
   }
 }

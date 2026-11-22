@@ -3,7 +3,9 @@ import {
   computeEqCurve,
   computeEqCurvePoints,
   DEFAULT_EQ_CONFIG,
+  formatBalanceLabel,
   PRESET_MAP,
+  presetLabel,
   type EqConfig,
 } from './webAudioEq';
 
@@ -47,5 +49,13 @@ describe('webAudioEq', () => {
     const highGain = curve.points[95]![1];
     expect(lowGain).toBeLessThan(-3);
     expect(highGain).toBeGreaterThan(3);
+  });
+
+  it('formats channel balance labels and preset labels accurately', () => {
+    expect(formatBalanceLabel(0)).toBe('Center');
+    expect(formatBalanceLabel(-0.35)).toBe('35% Left');
+    expect(formatBalanceLabel(0.5)).toBe('50% Right');
+    expect(presetLabel('bass_boost')).toBe('Bass Boost');
+    expect(presetLabel('flat')).toBe('Flat');
   });
 });

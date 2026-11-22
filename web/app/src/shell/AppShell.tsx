@@ -12,7 +12,10 @@ import { useDiscordPresence } from '@/playback/discordPresence';
 import { startHistoryReporting } from '@/playback/historyReporting';
 import { startLivePresence } from '@/playback/livePresence';
 import { useUi } from '@/state/ui';
+import { AudioOutputModal } from './AudioOutputModal';
+import { AudioPipelineDialog } from './AudioPipelineDialog';
 import { Banner, bannerButtonClass } from './Banner';
+import { MobileBottomChrome } from './MobileBottomChrome';
 import { MobileTopBar } from './MobileTopBar';
 import { PlayerBar } from './PlayerBar';
 import { Sidebar } from './Sidebar';
@@ -82,11 +85,12 @@ export function AppShell() {
           id="scrollable-page"
           className="absolute inset-0 overflow-x-hidden overflow-y-auto pl-(--web-navigation-width) [scrollbar-gutter:stable] data-tint:bg-(--page-tint) data-tint:transition-[background-color] data-tint:duration-300 data-tint:ease-in max-sm:pt-(--mobile-top-bar-height) max-sm:pl-0"
         >
-          <div className="min-h-full pb-[calc(var(--player-pill-height)+var(--player-bottom-offset)+40px)]">
+          <div className="min-h-full pb-[calc(var(--player-pill-height)+var(--player-bottom-offset)+40px)] max-sm:pb-[156px]">
             <Outlet />
           </div>
         </main>
         <PlayerBar />
+        <MobileBottomChrome />
         <SidePanel />
       </div>
       {banner}
@@ -95,6 +99,8 @@ export function AppShell() {
           <FullScreenPlayer />
         </Suspense>
       )}
+      <AudioOutputModal />
+      <AudioPipelineDialog />
     </div>
   );
 }

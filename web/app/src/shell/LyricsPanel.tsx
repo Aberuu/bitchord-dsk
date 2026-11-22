@@ -1,6 +1,6 @@
 // Registers <am-lyrics>.
 import '@uimaxbai/am-lyrics/am-lyrics.js';
-import { Check, ChevronDown, Loader2, Minus, Settings2 } from 'lucide-react';
+import { Check, ChevronDown, Globe, Languages, Loader2, Minus, Settings2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useCanvas } from '@/data/spotify/canvas';
 import { getBridge } from '@/extension/bridge';
@@ -236,35 +236,64 @@ function useUngranted(): string[] {
 
 const NO_STATES: Partial<Record<LyricsSourceId, SourceState>> = {};
 
-/** The provider picker: which provider these lyrics are from, and the others' answers for this track. */
-function ProviderPicker({
-  current,
-  variant,
-  toolbarActions,
+function ProviderMenu({
+  anchor,
+  onClose,
+  onOpenSettings,
 }: {
-  current: LyricsSourceId | null;
-  variant: 'panel' | 'full' | 'page';
-  toolbarActions?: React.ReactNode;
+  anchor: HTMLElement | null;
+  onClose: () => void;
+  onOpenSettings: () => void;
 }) {
   const videoId = usePlayer((s) => s.nowPlaying?.videoId ?? '');
   const states = useLyricsUi((s) => s.states[videoId]) ?? NO_STATES;
   const picked = useLyricsUi((s) => s.picked[videoId]);
   const pick = useLyricsUi((s) => s.pick);
+  if (!anchor) return null;
+
+  return (
+    <Menu anchor={anchor} placement="above-start" onClose={onClose} label="Lyrics provider">
+      <MenuItem checked={!picked} onSelect={() => (onClose(), pick(videoId, null))}>
+        Best available
+      </MenuItem>
+      <MenuSeparator />
+      <MenuHeader>Providers</MenuHeader>
+      {enabledSources().map((id) => {
+        const state = states[id];
+        return (
+          <MenuItem
+            key={id}
+            checked={picked === id}
+            trailing={
+              state === 'pending' ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : state === 'found' ? (
+                <Check size={13} />
+              ) : state === 'missing' ? (
+                <Minus size={13} />
+              ) : undefined
+            }
+            onSelect={() => (onClose(), pick(videoId, id))}
+          >
+            {sourceById(id)?.label}
+          </MenuItem>
+        );
+      })}
+      <MenuSeparator />
+      <MenuItem onSelect={() => (onClose(), onOpenSettings())}>Lyric Settings…</MenuItem>
+    </Menu>
+  );
+}
+
+/** Side-panel header picker when LyricsPanel runs in the right-side bar. */
+function ProviderPicker({ current }: { current: LyricsSourceId | null }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [settings, setSettings] = useState(false);
   const close = useCallback(() => setAnchor(null), []);
   const label = current ? sourceById(current)?.label : 'Lyrics';
 
   return (
-    <div
-      className={
-        variant === 'page'
-          ? 'mx-auto mb-3 flex items-center gap-1.5 rounded-pill border border-white/14 bg-black/28 px-2.5 py-1 shadow-sm backdrop-blur-md'
-          : variant === 'full'
-            ? 'flex items-center justify-between pb-1 opacity-0 transition-opacity duration-200 group-hover/panel:opacity-100 focus-within:opacity-100'
-            : 'flex items-center justify-between px-4 pt-4 pb-1'
-      }
-    >
+    <div className="flex items-center justify-between px-4 pt-4 pb-1">
       <button
         className="inline-flex items-center gap-1 rounded-pill px-2.5 py-1 type-callout-emphasized text-secondary transition-colors hover:bg-quinary hover:text-primary"
         aria-haspopup="menu"
@@ -281,39 +310,7 @@ function ProviderPicker({
       >
         <Settings2 size={15} />
       </button>
-      {toolbarActions}
-      {anchor && (
-        <Menu anchor={anchor} placement="below-end" onClose={close} label="Lyrics provider">
-          <MenuItem checked={!picked} onSelect={() => (close(), pick(videoId, null))}>
-            Best available
-          </MenuItem>
-          <MenuSeparator />
-          <MenuHeader>Providers</MenuHeader>
-          {enabledSources().map((id) => {
-            const state = states[id];
-            return (
-              <MenuItem
-                key={id}
-                checked={picked === id}
-                trailing={
-                  state === 'pending' ? (
-                    <Loader2 size={13} className="animate-spin" />
-                  ) : state === 'found' ? (
-                    <Check size={13} />
-                  ) : state === 'missing' ? (
-                    <Minus size={13} />
-                  ) : undefined
-                }
-                onSelect={() => (close(), pick(videoId, id))}
-              >
-                {sourceById(id)?.label}
-              </MenuItem>
-            );
-          })}
-          <MenuSeparator />
-          <MenuItem onSelect={() => (close(), setSettings(true))}>Lyric Settings…</MenuItem>
-        </Menu>
-      )}
+      <ProviderMenu anchor={anchor} onClose={close} onOpenSettings={() => setSettings(true)} />
       {settings && <LyricsSettings onClose={() => setSettings(false)} />}
     </div>
   );
@@ -381,18 +378,10 @@ const panel = 'group/panel relative isolate flex min-h-0 flex-1 flex-col overflo
 const fullSizes =
   '[--bitchord-lyric-size:26px] min-[980px]:[--bitchord-lyric-size:30px] min-[1320px]:[--bitchord-lyric-size:36px] min-[1680px]:[--bitchord-lyric-size:42px]';
 
-/**
- * The lyrics, with their provider picker and empty states: the side panel
- * (report §7), the dedicated /lyrics page, and the right-hand column of the
- * full-screen player, where the lines are larger and the player's mesh stands
- * in for the Canvas.
- */
 export function LyricsPanel({
   variant = 'panel',
-  toolbarActions,
 }: {
   variant?: 'panel' | 'full' | 'page';
-  toolbarActions?: React.ReactNode;
 }) {
   const lyrics = useLyrics();
   const hasTrack = usePlayer((s) => s.nowPlaying !== null);
@@ -401,8 +390,13 @@ export function LyricsPanel({
   const ungranted = useUngranted();
   const canvas = useCanvas();
   const fontReady = useLyricFont();
+  const [providerAnchor, setProviderAnchor] = useState<HTMLElement | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const closeProvider = useCallback(() => setProviderAnchor(null), []);
+
   const result = lyrics.data;
   const full = variant === 'full' || variant === 'page';
+  const sourceLabel = result?.source ? sourceById(result.source)?.label ?? result.source : null;
   const empty = full
     ? 'flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center type-title-3 text-secondary'
     : 'flex flex-1 flex-col items-center justify-center gap-2 px-6 pb-20 text-center type-[400_12px/16px] text-secondary';
@@ -411,30 +405,79 @@ export function LyricsPanel({
   return (
     <div className={full ? `${panel} ${fullSizes}` : panel}>
       {canvas && variant === 'panel' && <CanvasBackdrop url={canvas} />}
-      <ProviderPicker current={result?.source ?? null} variant={variant} toolbarActions={toolbarActions} />
+      {!full && <ProviderPicker current={result?.source ?? null} />}
       {ungranted.length > 0 && !result && !lyrics.isFetching && <PermissionNotice origins={ungranted} />}
-      {!hasTrack ? (
-        <div className={empty}>
-          <p className={emptyTitle}>No lyrics available</p>
-          <p>Play a song to see its lyrics here.</p>
-        </div>
-      ) : (lyrics.isPending && lyrics.fetchStatus !== 'idle') || (result && !fontReady) ? (
-        <div className={empty}>
-          <Loader2 size={20} className="animate-spin" />
-        </div>
-      ) : result ? (
-        <LyricsView ttml={result.ttml} full={full} />
-      ) : picked ? (
-        <div className={empty}>
-          <p className={emptyTitle}>Not on {sourceById(picked)?.label ?? 'this provider'}</p>
-          <p>This provider hasn’t got this song. Pick another, or Best available, in the list above.</p>
-        </div>
-      ) : (
-        <div className={empty}>
-          <p className={emptyTitle}>No lyrics available</p>
-          <p>None of the lyric providers has this song. Try another in the list above.</p>
+
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {!hasTrack ? (
+          <div className={empty}>
+            <p className={emptyTitle}>No lyrics available</p>
+            <p>Play a song to see its lyrics here.</p>
+          </div>
+        ) : (lyrics.isPending && lyrics.fetchStatus !== 'idle') || (result && !fontReady) ? (
+          <div className={empty}>
+            <Loader2 size={20} className="animate-spin" />
+          </div>
+        ) : result ? (
+          <LyricsView ttml={result.ttml} full={full} />
+        ) : picked ? (
+          <div className={empty}>
+            <p className={emptyTitle}>Not on {sourceById(picked)?.label ?? 'this provider'}</p>
+            <p>This provider hasn’t got this song. Pick another, or Best available, using the globe button below.</p>
+          </div>
+        ) : (
+          <div className={empty}>
+            <p className={emptyTitle}>No lyrics available</p>
+            <p>None of the lyric providers has this song. Try another provider below.</p>
+          </div>
+        )}
+
+        {/* Floating circular Globe (Provider) and Translate/Settings buttons matching BitChord Mobile Screenshots 6-7 */}
+        {full && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-2 z-2 flex items-center justify-between px-1">
+            <button
+              type="button"
+              aria-label="Lyrics provider"
+              title="Switch lyrics provider"
+              aria-haspopup="menu"
+              onClick={(e) => setProviderAnchor(e.currentTarget)}
+              className="pointer-events-auto grid size-10 place-items-center rounded-full border border-white/14 bg-white/14 text-white backdrop-blur-md transition-colors hover:bg-white/24 active:scale-95"
+            >
+              <Globe size={18} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              aria-label="Lyric settings and translation"
+              title="Lyric settings and translation"
+              onClick={() => setSettingsOpen(true)}
+              className="pointer-events-auto grid size-10 place-items-center rounded-full border border-white/14 bg-white/14 text-white backdrop-blur-md transition-colors hover:bg-white/24 active:scale-95"
+            >
+              <Languages size={18} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Underlined "Lyrics by <provider>" attribution matching Screenshot 6 */}
+      {full && (
+        <div className="flex items-center justify-between pt-1 pb-0.5">
+          <button
+            type="button"
+            aria-haspopup="menu"
+            onClick={(e) => setProviderAnchor(e.currentTarget)}
+            className="type-callout text-white/65 underline decoration-white/35 underline-offset-4 transition-colors hover:text-white"
+          >
+            {sourceLabel ? `Lyrics by ${sourceLabel}` : 'Choose lyrics provider'}
+          </button>
         </div>
       )}
+
+      <ProviderMenu
+        anchor={providerAnchor}
+        onClose={closeProvider}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
+      {settingsOpen && <LyricsSettings onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }

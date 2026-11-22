@@ -1,41 +1,24 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { RefreshCw, RotateCcw } from 'lucide-react';
-import { useMemo } from 'react';
-import { PageHeader } from '@/components/PageHeader';
+import { AudioLines, Check, ChevronRight, RotateCcw, SlidersHorizontal } from 'lucide-react';
+import { useMemo, useRef, type KeyboardEvent, type PointerEvent } from 'react';
+import { PrefetchLink } from '@/components/PrefetchLink';
 import { Select } from '@/components/Select';
-import {
-  desktopApi,
-  isTauriDesktop,
-  type AudioSettings,
-  type EqualizerPresetId,
-  type OutputMode,
-} from '@/desktop/tauriBridge';
-import { queryClient } from '@/lib/queryClient';
+import { SubpageHeader } from '@/components/SubpageHeader';
+import type { EqualizerPresetId } from '@/desktop/tauriBridge';
+import { useAudioPipeline } from '@/desktop/useAudioPipeline';
 import {
   BAND_LABELS,
   computeEqCurve,
   DEFAULT_EQ_CONFIG,
+  formatBalanceLabel,
   MANUAL_BANDS_HZ,
   PRESET_MAP,
+  TONE_STEPS,
   type EqConfig,
 } from '@/playback/webAudioEq';
 import { usePlayer } from '@/state/player';
+import { useUi } from '@/state/ui';
 import { Toggle } from './IntegrationSettings';
 import { settingsUi } from './settingsStyles';
-
-const SPEED_OPTIONS = [0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2].map((r) => ({
-  value: r,
-  label: `${r}x`,
-}));
-
-const SLEEP_OPTIONS: { value: string; label: string }[] = [
-  { value: 'off', label: 'Off' },
-  { value: '15', label: '15 minutes' },
-  { value: '30', label: '30 minutes' },
-  { value: '45', label: '45 minutes' },
-  { value: '60', label: '60 minutes' },
-  { value: 'track', label: 'End of current track' },
-];
 
 function hzToX(hz: number): number {
   return (Math.log10(Math.max(20, Math.min(20000, hz)) / 20) / Math.log10(1000)) * 520;
@@ -45,19 +28,13 @@ function dbToY(db: number): number {
   return 80 - Math.max(-14, Math.min(14, db)) * (62 / 14);
 }
 
-function EqCurveSvg({
-  points,
-  eq,
-}: {
-  points: [number, number][];
-  eq: EqConfig;
-}) {
+function EqCurveSvg({ points, eq }: { points: [number, number][]; eq: EqConfig }) {
   const { linePath, areaPath, bandDots } = useMemo(() => {
     if (!points.length) {
       return {
         linePath: 'M 0 80 L 520 80',
         areaPath: 'M 0 80 L 520 80 L 520 80 L 0 80 Z',
-        bandDots: [] as { x: number; y: number; label: string; db: number }[],
+        bandDots: [] as { x: number; y: number; label: string }[],
       };
     }
     const coords = points.map(([hz, db]) => [hzToX(hz), dbToY(db)] as const);
@@ -80,18 +57,17 @@ function EqCurveSvg({
         x: hzToX(freq),
         y: dbToY(nearestDb),
         label: BAND_LABELS[idx]!,
-        db: eq.bandsDb[idx] ?? 0,
       };
     });
 
     return { linePath: line, areaPath: area, bandDots: dots };
-  }, [points, eq]);
+  }, [points]);
 
   return (
-    <div className="rounded-[10px] bg-page/70 p-3">
+    <div className="rounded-[12px] bg-page/75 p-3">
       <svg
         viewBox="0 0 520 160"
-        className="h-[156px] w-full overflow-visible"
+        className="h-[152px] w-full overflow-visible"
         role="img"
         aria-label="Equalizer frequency response curve"
       >
@@ -117,13 +93,7 @@ function EqCurveSvg({
                 strokeWidth={isZero ? '1.1' : '0.6'}
                 strokeDasharray={isZero ? undefined : '3 3'}
               />
-              <text
-                x="4"
-                y={y - 4}
-                fill="var(--systemTertiary)"
-                fontSize="9.5"
-                fontFamily="var(--font-sans)"
-              >
+              <text x="4" y={y - 4} fill="var(--systemTertiary)" fontSize="9.5" fontFamily="var(--font-sans)">
                 {db > 0 ? `+${db} dB` : `${db} dB`}
               </text>
             </g>
@@ -184,48 +154,156 @@ function EqCurveSvg({
   );
 }
 
+const GRID_POINTS = Array.from({ length: TONE_STEPS * 2 + 1 }, (_, i) => i - TONE_STEPS);
+
+function TonePad2D({
+  x,
+  y,
+  enabled,
+  onChange,
+}: {
+  x: number;
+  y: number;
+  enabled: boolean;
+  onChange: (nextX: number, nextY: number) => void;
+}) {
+  const padRef = useRef<HTMLDivElement>(null);
+  const dragging = useRef(false);
+
+  const updateFromClientPoint = (clientX: number, clientY: number) => {
+    const rect = padRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return;
+    const inset = 18;
+    const nx = Math.max(0, Math.min(1, (clientX - (rect.left + inset)) / Math.max(1, rect.width - inset * 2)));
+    const ny = Math.max(0, Math.min(1, (clientY - (rect.top + inset)) / Math.max(1, rect.height - inset * 2)));
+    const stepX = Math.round((nx * 2 - 1) * TONE_STEPS);
+    const stepY = Math.round((1 - ny * 2) * TONE_STEPS);
+    onChange(stepX, stepY);
+  };
+
+  const handlePointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    dragging.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    updateFromClientPoint(e.clientX, e.clientY);
+  };
+
+  const handlePointerMove = (e: PointerEvent<HTMLDivElement>) => {
+    if (!dragging.current) return;
+    updateFromClientPoint(e.clientX, e.clientY);
+  };
+
+  const handlePointerUp = () => {
+    dragging.current = false;
+  };
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      onChange(Math.max(-TONE_STEPS, x - 1), y);
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      onChange(Math.min(TONE_STEPS, x + 1), y);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      onChange(x, Math.min(TONE_STEPS, y + 1));
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      onChange(x, Math.max(-TONE_STEPS, y - 1));
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      onChange(0, 0);
+    }
+  };
+
+  const puckLeftPct = ((x + TONE_STEPS) / (TONE_STEPS * 2)) * 100;
+  const puckTopPct = ((TONE_STEPS - y) / (TONE_STEPS * 2)) * 100;
+
+  return (
+    <div className="flex flex-col gap-2.5 px-4 pt-4 pb-3">
+      <div className="flex items-center justify-between type-caption-2 tracking-[0.06em] text-tertiary uppercase">
+        <span>Warm</span>
+        <span>Mid Boost</span>
+        <span>Bright</span>
+      </div>
+
+      <div
+        ref={padRef}
+        role="slider"
+        tabIndex={0}
+        aria-label="Dynamic 2D Tone Pad. Use arrow keys or drag to adjust warmth and mid contour."
+        aria-valuetext={`Warm to Bright ${x}, Mid Contour ${y}`}
+        aria-valuemin={-TONE_STEPS}
+        aria-valuemax={TONE_STEPS}
+        aria-valuenow={x}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        onKeyDown={handleKeyDown}
+        className="relative mx-auto aspect-[16/10] w-full max-w-[440px] cursor-pointer touch-none rounded-[14px] bg-page/75 p-[18px] select-none"
+      >
+        <div className="relative size-full">
+          {/* 11x11 dot grid matching BitChord Mobile TonePad */}
+          <div className="grid size-full grid-cols-11 grid-rows-11 place-items-center" aria-hidden="true">
+            {GRID_POINTS.map((row) =>
+              GRID_POINTS.map((col) => {
+                const isOrigin = row === 0 && col === 0;
+                const isAxis = row === 0 || col === 0;
+                return (
+                  <span
+                    key={`${row}-${col}`}
+                    className={`rounded-full ${
+                      isOrigin
+                        ? 'size-[5px] bg-secondary'
+                        : isAxis
+                          ? 'size-[3.5px] bg-tertiary/60'
+                          : 'size-[3px] bg-tertiary/35'
+                    }`}
+                  />
+                );
+              }),
+            )}
+          </div>
+
+          {/* Interactive puck */}
+          <div
+            aria-hidden="true"
+            className={`pointer-events-none absolute size-6 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 transition-[left,top,transform] duration-120 ease-out ${
+              enabled
+                ? 'border-white bg-key-bg shadow-[0_3px_14px_rgba(250,45,72,0.45)]'
+                : 'border-white/70 bg-secondary shadow-sm'
+            }`}
+            style={{ left: `${puckLeftPct}%`, top: `${puckTopPct}%` }}
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between pt-1 type-callout tabular-nums text-secondary">
+        <span>
+          Tone Tilt:{' '}
+          <strong className="font-semibold text-primary">
+            {x === 0 ? 'Neutral' : x < 0 ? `Warm ${Math.abs(x)}` : `Bright +${x}`}
+          </strong>
+        </span>
+        <span>
+          Mid Contour:{' '}
+          <strong className="font-semibold text-primary">
+            {y === 0 ? 'Flat' : y > 0 ? `+${y}` : `${y}`}
+          </strong>
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export default function AudioEqPage() {
-  const desktop = isTauriDesktop();
-  const playbackRate = usePlayer((s) => s.playbackRate);
-  const sleepTimerEndMs = usePlayer((s) => s.sleepTimerEndMs);
-  const sleepAfterTrack = usePlayer((s) => s.sleepAfterTrack);
   const eq = usePlayer((s) => s.eq);
-  const { setPlaybackRate, setSleepTimer, setEq } = usePlayer.getState();
+  const balance = usePlayer((s) => s.balance);
+  const { setEq, setBalance } = usePlayer.getState();
+  const pipeline = useAudioPipeline();
+  const setPipelineOpen = useUi((s) => s.setAudioPipelineOpen);
 
   const curve = useMemo(() => computeEqCurve(eq), [eq]);
-
-  const devicesQuery = useQuery({
-    queryKey: ['desktop', 'audio', 'devices'],
-    queryFn: () => desktopApi.audioListDevices(),
-    enabled: desktop,
-  });
-
-  const snapQuery = useQuery({
-    queryKey: ['desktop', 'audio', 'snapshot'],
-    queryFn: () => desktopApi.audioSnapshot(),
-    enabled: desktop,
-  });
-
-  const save = useMutation({
-    mutationFn: (next: AudioSettings) => desktopApi.audioUpdateSettings(next),
-    onSuccess: (updated) => {
-      queryClient.setQueryData(['desktop', 'audio', 'snapshot'], updated);
-      usePlayer.setState({ bitPerfectStatus: updated.bitPerfect });
-    },
-  });
-
-  const snap = snapQuery.data;
-  const settings = snap?.settings;
-  const devices = devicesQuery.data ?? [];
-
-  const patchSettings = (patch: Partial<AudioSettings>) => {
-    if (!settings) return;
-    save.mutate({ ...settings, ...patch, eq });
-  };
-
-  const patchEq = (patch: Partial<EqConfig>) => {
-    setEq(patch);
-  };
 
   const resetFlat = () => {
     setEq({
@@ -235,56 +313,112 @@ export default function AudioEqPage() {
     });
   };
 
-  const currentSleepValue = sleepAfterTrack
-    ? 'track'
-    : sleepTimerEndMs
-      ? String(Math.max(15, Math.round((sleepTimerEndMs - Date.now()) / 60_000)))
-      : 'off';
-
   return (
     <div className={settingsUi.centered}>
-      <PageHeader title="Audio & Equalizer" />
+      <SubpageHeader title="Equalizer" backTo="/settings" />
       <div className={settingsUi.body}>
-        <div className="flex items-center justify-between pr-2">
-          <h2 className={settingsUi.sectionHeader}>Equalizer &amp; Frequency Response</h2>
-          <span className="mt-5 type-caption-1 tabular-nums text-secondary">
-            {eq.enabled
-              ? `Active · Preamp ${curve.preampDb >= 0 ? `+${curve.preampDb.toFixed(1)}` : curve.preampDb.toFixed(1)} dB`
-              : 'Bypassed (0.0 dB Flat)'}
-          </span>
-        </div>
-
         <section className={settingsUi.group}>
           <Toggle
-            label="Enable Equalizer"
+            label="Equalizer"
             detail={
-              settings?.outputMode === 'wasapi_exclusive'
-                ? 'Bypassed automatically during Bit-Exact exclusive output to keep PCM untouched.'
-                : '10-slot parametric & shelf filter bank with automatic half-boost preamp and peak limiter.'
+              eq.enabled
+                ? `Active · Preamp ${curve.preampDb >= 0 ? `+${curve.preampDb.toFixed(1)}` : curve.preampDb.toFixed(1)} dB`
+                : '10-slot parametric & shelf filter bank with automatic makeup preamp and limiter.'
             }
             checked={eq.enabled}
-            onChange={(enabled) => patchEq({ enabled })}
+            onChange={(enabled) => setEq({ enabled })}
           />
+        </section>
 
-          <label className={settingsUi.controlRow}>
-            <span>Mode</span>
-            <Select<'manual' | 'tone'>
-              label="Equalizer Mode"
-              value={eq.mode}
-              options={[
-                { value: 'manual', label: '7-Band Manual' },
-                { value: 'tone', label: 'Tone Pad' },
-              ]}
-              onChange={(mode) => patchEq({ mode })}
-            />
-          </label>
+        {/* Segmented pill switching Dynamic Tone Pad vs Manual 7-Band matching EqualizerScreen.kt */}
+        <div
+          role="tablist"
+          aria-label="Equalizer mode"
+          className="mt-5 grid grid-cols-2 gap-1 rounded-pill bg-segmented p-1"
+        >
+          {(
+            [
+              { id: 'tone', label: 'Dynamic' },
+              { id: 'manual', label: 'Manual' },
+            ] as const
+          ).map((tab) => {
+            const active = eq.mode === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setEq({ mode: tab.id })}
+                className={`rounded-pill px-3 py-2 text-center type-callout-emphasized transition-colors ${
+                  active
+                    ? 'bg-segmented-selected text-primary shadow-xs'
+                    : 'text-secondary hover:text-primary'
+                }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
 
-          <div className="px-4 py-3 hairline-[16px]">
+        {/* Always-visible live Frequency Response Curve */}
+        <h2 className={settingsUi.sectionHeader}>Frequency Response</h2>
+        <section className={settingsUi.group}>
+          <div className="px-4 py-3.5">
             <EqCurveSvg points={curve.points} eq={eq} />
           </div>
+        </section>
 
-          {eq.mode === 'manual' ? (
-            <>
+        {eq.mode === 'tone' ? (
+          <>
+            <h2 className={settingsUi.sectionHeader}>Tone Pad</h2>
+            <section className={settingsUi.group}>
+              <TonePad2D
+                x={eq.toneX}
+                y={eq.toneY}
+                enabled={eq.enabled}
+                onChange={(toneX, toneY) => setEq({ enabled: true, mode: 'tone', toneX, toneY })}
+              />
+
+              <button
+                type="button"
+                onClick={() => setEq({ toneFocused: false })}
+                className={`${settingsUi.integrationPlain} ${settingsUi.linkRow}`}
+              >
+                <span className={settingsUi.rowText}>
+                  <span className="type-title-3 text-primary">Broad</span>
+                  <span className={settingsUi.rowDetail}>Gentle wide-Q shelves across lows, mids, and highs.</span>
+                </span>
+                {!eq.toneFocused && <Check size={18} strokeWidth={2.4} className="text-key" aria-hidden="true" />}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setEq({ toneFocused: true })}
+                className={`${settingsUi.integrationPlain} ${settingsUi.linkRow}`}
+              >
+                <span className={settingsUi.rowText}>
+                  <span className="type-title-3 text-primary">Focused</span>
+                  <span className={settingsUi.rowDetail}>Narrower shelf and mid-band Q for targeted shaping.</span>
+                </span>
+                {eq.toneFocused && <Check size={18} strokeWidth={2.4} className="text-key" aria-hidden="true" />}
+              </button>
+
+              <button
+                type="button"
+                onClick={resetFlat}
+                className="relative flex w-full items-center justify-center gap-1.5 px-4 py-3 type-body-emphasized text-key transition-colors hover:bg-tracklist-hover hairline-[16px]"
+              >
+                <RotateCcw size={14} aria-hidden="true" />
+                Reset Tone Pad
+              </button>
+            </section>
+          </>
+        ) : (
+          <>
+            <h2 className={settingsUi.sectionHeader}>Bands &amp; Presets</h2>
+            <section className={settingsUi.group}>
               <div className={settingsUi.controlRow}>
                 <span>Preset</span>
                 <div className="flex items-center gap-2">
@@ -297,7 +431,7 @@ export default function AudioEqPage() {
                     }))}
                     onChange={(preset) => {
                       const bands = PRESET_MAP[preset].bands;
-                      patchEq({
+                      setEq({
                         enabled: true,
                         preset,
                         ...(bands ? { bandsDb: [...bands] as EqConfig['bandsDb'] } : {}),
@@ -318,7 +452,7 @@ export default function AudioEqPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-7 gap-2 px-4 py-4 hairline-[16px]">
+              <div className="relative grid grid-cols-7 gap-2 px-4 py-4 hairline-[16px]">
                 {BAND_LABELS.map((label, idx) => {
                   const val = eq.bandsDb[idx] ?? 0;
                   return (
@@ -337,7 +471,7 @@ export default function AudioEqPage() {
                         onChange={(e) => {
                           const next = [...eq.bandsDb] as EqConfig['bandsDb'];
                           next[idx] = Number(e.currentTarget.value);
-                          patchEq({ enabled: true, preset: 'custom', bandsDb: next });
+                          setEq({ enabled: true, preset: 'custom', bandsDb: next });
                         }}
                       />
                       <span className="type-caption-2 text-secondary">{label}</span>
@@ -345,170 +479,74 @@ export default function AudioEqPage() {
                   );
                 })}
               </div>
-            </>
-          ) : (
-            <>
-              <label className={settingsUi.controlRow}>
-                <span>Warm / Bright Tilt ({eq.toneX > 0 ? `+${eq.toneX}` : eq.toneX})</span>
-                <input
-                  type="range"
-                  min={-5}
-                  max={5}
-                  step={1}
-                  value={eq.toneX}
-                  aria-label="Warm or bright tilt"
-                  className="w-44 cursor-pointer accent-key"
-                  onChange={(e) => patchEq({ enabled: true, toneX: Number(e.currentTarget.value) })}
-                />
-              </label>
-              <label className={settingsUi.controlRow}>
-                <span>Mid Contour ({eq.toneY > 0 ? `+${eq.toneY}` : eq.toneY})</span>
-                <input
-                  type="range"
-                  min={-5}
-                  max={5}
-                  step={1}
-                  value={eq.toneY}
-                  aria-label="Mid contour"
-                  className="w-44 cursor-pointer accent-key"
-                  onChange={(e) => patchEq({ enabled: true, toneY: Number(e.currentTarget.value) })}
-                />
-              </label>
-              <Toggle
-                label="Focused Bandwidth"
-                detail="Narrows shelf and mid-band Q for targeted tone shaping."
-                checked={eq.toneFocused}
-                onChange={(toneFocused) => patchEq({ toneFocused })}
-              />
-            </>
-          )}
-        </section>
+            </section>
+          </>
+        )}
 
-        <h2 className={settingsUi.sectionHeader}>Playback Control</h2>
+        {/* Channel Balance section matching EqualizerScreen.kt */}
+        <h2 className={settingsUi.sectionHeader}>Balance</h2>
         <section className={settingsUi.group}>
-          <label className={settingsUi.controlRow}>
-            <span>Playback Speed</span>
-            <Select
-              label="Playback Speed"
-              value={playbackRate}
-              options={SPEED_OPTIONS}
-              onChange={(rate) => setPlaybackRate(rate)}
-            />
-          </label>
-          <label className={settingsUi.controlRow}>
-            <span className={settingsUi.rowText}>
-              <span>Sleep Timer</span>
-              {sleepTimerEndMs && (
-                <span className={settingsUi.rowDetail}>
-                  Stops at {new Date(sleepTimerEndMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-                </span>
-              )}
-              {sleepAfterTrack && <span className={settingsUi.rowDetail}>Will pause after this track finishes.</span>}
-            </span>
-            <Select
-              label="Sleep Timer"
-              value={SLEEP_OPTIONS.some((o) => o.value === currentSleepValue) ? currentSleepValue : '30'}
-              options={SLEEP_OPTIONS}
-              onChange={(val) => {
-                if (val === 'off') setSleepTimer(null);
-                else if (val === 'track') setSleepTimer('track');
-                else setSleepTimer(Number(val));
-              }}
-            />
-          </label>
-        </section>
-
-        <h2 className={settingsUi.sectionHeader}>Windows Audio Output</h2>
-        {desktop && settings && snap ? (
-          <>
-            <section className={settingsUi.group}>
-              <label className={settingsUi.controlRow}>
-                <span className={settingsUi.rowText}>
-                  <span>Output Mode</span>
-                  <span className={settingsUi.rowDetail}>
-                    WASAPI Exclusive bypasses the Windows mixer for local lossless files.
-                  </span>
-                </span>
-                <Select<OutputMode>
-                  label="Output Mode"
-                  value={settings.outputMode}
-                  options={[
-                    { value: 'shared', label: 'WASAPI Shared' },
-                    { value: 'wasapi_exclusive', label: 'WASAPI Exclusive (Bit-Perfect)' },
-                    ...(snap.asioAvailable ? [{ value: 'asio' as const, label: 'ASIO Driver' }] : []),
-                  ]}
-                  onChange={(outputMode) => patchSettings({ outputMode })}
-                />
-              </label>
-
-              <label className={settingsUi.controlRow}>
-                <span className={settingsUi.rowText}>
-                  <span>Output Device</span>
-                  <span className={settingsUi.rowDetail}>
-                    {devices.length ? `${devices.length} Windows audio endpoints detected` : 'System default output'}
-                  </span>
-                </span>
-                <span className="inline-flex items-center gap-2">
-                  <Select<string>
-                    label="Output Device"
-                    value={settings.deviceId ?? '__default__'}
-                    options={[
-                      { value: '__default__', label: 'Windows Default Device' },
-                      ...devices.map((d) => ({
-                        value: d.id,
-                        label: `${d.name} (${d.backend})`,
-                      })),
-                    ]}
-                    onChange={(v) => patchSettings({ deviceId: v === '__default__' ? null : v })}
-                  />
+          <div className="flex flex-col gap-3 px-4 py-4">
+            <div className="flex items-center justify-between">
+              <span className="type-title-3 text-primary">Left / Right Balance</span>
+              <div className="flex items-center gap-2">
+                <span className="type-callout tabular-nums text-secondary">{formatBalanceLabel(balance)}</span>
+                {Math.abs(balance) > 0.01 && (
                   <button
                     type="button"
-                    className="grid size-7 cursor-pointer place-items-center rounded-[6px] bg-quaternary text-secondary hover:text-primary"
-                    aria-label="Refresh audio devices"
-                    onClick={() => void devicesQuery.refetch()}
+                    onClick={() => setBalance(0)}
+                    className={settingsUi.inlineButton}
                   >
-                    <RefreshCw size={13} aria-hidden="true" />
+                    Center
                   </button>
-                </span>
-              </label>
-
-              <div className={settingsUi.row}>
-                <span className={settingsUi.rowText}>
-                  <span>Hardware Path Status</span>
-                  <span className={settingsUi.rowDetail}>
-                    {snap.bitPerfect.active
-                      ? snap.bitPerfect.exact
-                        ? `Bit-exact via ${snap.bitPerfect.driver} (${snap.bitPerfect.sampleRateHz / 1000} kHz / ${snap.bitPerfect.outputBits}-bit)`
-                        : `DAC format converted with TPDF dither (${snap.bitPerfect.sampleRateHz / 1000} kHz / ${snap.bitPerfect.outputBits}-bit; not bit-perfect)`
-                      : snap.bitPerfect.fallbackReason
-                        ? `Fallback to shared output: ${snap.bitPerfect.fallbackReason}`
-                        : 'WASAPI Shared + Web Audio Biquad DSP active'}
-                  </span>
-                </span>
-                <span className="type-callout-emphasized text-secondary">
-                  {snap.bitPerfect.active ? (snap.bitPerfect.exact ? 'Bit-Exact' : 'Converted') : 'Shared'}
-                </span>
+                )}
               </div>
-            </section>
-            {!snap.asioAvailable && (
-              <p className={settingsUi.footer}>
-                ASIO output requires compiling with the Steinberg ASIO SDK (--features asio). WASAPI Exclusive handles class-compliant USB DACs and DoP streams directly.
-              </p>
-            )}
-          </>
-        ) : (
-          <section className={settingsUi.group}>
-            <div className={settingsUi.row}>
-              <span className={settingsUi.rowText}>
-                <span>Active Audio Engine</span>
-                <span className={settingsUi.rowDetail}>
-                  Web Audio API 10-slot BiquadFilter bank + Peak Limiter (WASAPI hardware device selection is active in the Windows Desktop app).
-                </span>
-              </span>
-              <span className="type-callout-emphasized text-secondary">Web Audio DSP</span>
             </div>
-          </section>
-        )}
+            <div className="flex items-center gap-3">
+              <span className="type-caption-2 font-semibold text-secondary">L</span>
+              <input
+                type="range"
+                min={-1}
+                max={1}
+                step={0.05}
+                value={balance}
+                aria-label="Stereo channel balance"
+                onChange={(e) => setBalance(Number(e.currentTarget.value))}
+                className="h-2 flex-1 cursor-pointer accent-key"
+              />
+              <span className="type-caption-2 font-semibold text-secondary">R</span>
+            </div>
+          </div>
+        </section>
+
+        <h2 className={settingsUi.sectionHeader}>Audio Output &amp; Signal Path</h2>
+        <section className={settingsUi.group}>
+          <button
+            type="button"
+            onClick={() => setPipelineOpen(true)}
+            className={`${settingsUi.integration} ${settingsUi.linkRow}`}
+          >
+            <span className={settingsUi.iconPlain}>
+              <AudioLines size={19} strokeWidth={2} aria-hidden="true" />
+            </span>
+            <span className={settingsUi.rowText}>
+              <span className="type-title-3 text-primary">Audio Pipeline</span>
+              <span className={settingsUi.rowDetail}>{pipeline.shortSubtitle} · {pipeline.activeDeviceName}</span>
+            </span>
+            <ChevronRight size={17} className="text-tertiary" aria-hidden="true" />
+          </button>
+
+          <PrefetchLink to="/settings/playback" className={`${settingsUi.integration} ${settingsUi.linkRow}`}>
+            <span className={settingsUi.iconPlain}>
+              <SlidersHorizontal size={19} strokeWidth={2} aria-hidden="true" />
+            </span>
+            <span className={settingsUi.rowText}>
+              <span className="type-title-3 text-primary">Playback &amp; WASAPI Output</span>
+              <span className={settingsUi.rowDetail}>Output precision, bit-perfect mode, crossfade, and spatial audio</span>
+            </span>
+            <ChevronRight size={17} className="text-tertiary" aria-hidden="true" />
+          </PrefetchLink>
+        </section>
       </div>
     </div>
   );

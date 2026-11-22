@@ -1,6 +1,7 @@
-import { Maximize, Minimize, X } from 'lucide-react';
+import { Cast, Maximize, Minimize, Volume1, Volume2, X } from 'lucide-react';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useLocation } from 'react-router';
+import { LogoMark } from '@/components/icons/LogoMark';
 import {
   BackwardIcon,
   ForwardIcon,
@@ -20,6 +21,7 @@ import { albumHref } from '@/components/music/links';
 import { MotionArtwork } from '@/components/music/MotionArtwork';
 import { VideoSurface } from '@/components/music/VideoSurface';
 import { useTrackMotion } from '@/data/apple/motionArt';
+import { useAudioPipeline } from '@/desktop/useAudioPipeline';
 import { sizedArtwork } from '@/lib/artwork';
 import { usePlayer } from '@/state/player';
 import { useUi } from '@/state/ui';
@@ -27,12 +29,11 @@ import { useHasVideo, useVideo } from '@/state/video';
 import { Credits, PageLink, pageLink } from './Lcd';
 import { LyricsPanel } from './LyricsPanel';
 import { MeshBackdrop } from './MeshBackdrop';
+import { MixWindowHighlight, NerdStats } from './NerdStats';
 import { albumPageFor } from './nowPlayingLinks';
 import { UpNext } from './UpNext';
-import { MixWindowHighlight, NerdStats } from './NerdStats';
 import { useScrubber } from './useScrubber';
 import { VideoQuality } from './VideoQuality';
-import { fadeForVolume, VolumeControl } from './VolumeControl';
 
 function useBrowserFullScreen(): boolean {
   return useSyncExternalStore(
@@ -44,27 +45,25 @@ function useBrowserFullScreen(): boolean {
   );
 }
 
-/** The seek line under the track's names: thicker on hover, with the times beneath its ends. */
 function Scrubber() {
   const { bar, elapsed, remaining, mixLabel, dragging, handlers } = useScrubber();
   return (
-    <div className="group/scrub mt-3.5" data-dragging={dragging || undefined}>
-      {/* A taller hit area than the line it carries. */}
+    <div className="group/scrub mt-3" data-dragging={dragging || undefined}>
       <div className="group/hit flex h-4 cursor-pointer touch-none items-center" {...handlers}>
         <div
-          className="relative h-1 flex-1 overflow-hidden rounded-[999px] bg-quaternary transition-[height] duration-120 ease-in group-hover/hit:h-2 group-data-dragging/scrub:h-2"
+          className="relative h-1.5 flex-1 overflow-hidden rounded-[999px] bg-white/22 transition-[height] duration-120 ease-in group-hover/hit:h-2 group-data-dragging/scrub:h-2"
           aria-hidden="true"
         >
           <MixWindowHighlight />
           <div
             ref={bar}
-            className="relative size-full origin-left scale-x-(--progress) bg-secondary transition-[background-color] duration-120 ease-in [--progress:0] group-hover/hit:bg-primary group-data-dragging/scrub:bg-primary"
+            className="relative size-full origin-left scale-x-(--progress) bg-white/85 transition-[background-color] duration-120 ease-in [--progress:0] group-hover/hit:bg-white group-data-dragging/scrub:bg-white"
           />
         </div>
       </div>
-      <div className="relative mt-0.5 flex justify-between type-[500_11px/14px] tabular-nums text-tertiary">
+      <div className="relative mt-1 flex justify-between type-[500_11px/14px] tabular-nums text-white/60">
         <span ref={elapsed} />
-        <span ref={mixLabel} className="pointer-events-none absolute inset-x-0 text-center text-secondary opacity-0" aria-hidden="true">
+        <span ref={mixLabel} className="pointer-events-none absolute inset-x-0 text-center text-white/80 opacity-0" aria-hidden="true">
           Mixing
         </span>
         <span ref={remaining} />
@@ -74,12 +73,10 @@ function Scrubber() {
 }
 
 const transportButton =
-  'grid place-items-center rounded-full transition-[background-color,scale] duration-100 ease-in enabled:hover:bg-quinary enabled:active:scale-90 disabled:opacity-40';
-// Shuffle and repeat, when on: full white on the mesh, where red would clash.
-const toggle = `${transportButton} size-9 text-tertiary aria-pressed:text-primary`;
-const skip = `${transportButton} size-12 text-primary`;
+  'grid place-items-center rounded-full transition-[background-color,scale] duration-100 ease-in enabled:hover:bg-white/14 enabled:active:scale-90 disabled:opacity-40';
+const toggle = `${transportButton} size-9 text-white/55 aria-pressed:text-white`;
+const skip = `${transportButton} size-12 text-white`;
 
-/** Shuffle, previous, play/pause, next, repeat. No volume: the pill keeps that. */
 function Transport() {
   const hasTrack = usePlayer((s) => s.nowPlaying !== null);
   const playing = usePlayer((s) => s.status === 'playing' || s.status === 'buffering');
@@ -89,14 +86,14 @@ function Transport() {
   const { togglePlay, next, previous, toggleShuffle, cycleRepeat } = usePlayer.getState();
 
   return (
-    <div className="mx-auto mt-[clamp(8px,1.6vh,16px)] mb-0 flex h-13 w-[min(100%,315px)] items-center justify-between">
+    <div className="mx-auto mt-2.5 flex h-13 w-[min(100%,320px)] items-center justify-between">
       <button className={toggle} aria-label="Shuffle" aria-pressed={shuffle} onClick={toggleShuffle}>
-        <ShuffleIcon size={30} />
+        <ShuffleIcon size={28} />
       </button>
       <button className={skip} disabled={!hasTrack} aria-label="Previous" onClick={previous}>
         <BackwardIcon size={40} />
       </button>
-      <button className={`${transportButton} size-14 text-primary`} disabled={!hasTrack} aria-label={playing ? 'Pause' : 'Play'} onClick={togglePlay}>
+      <button className={`${transportButton} size-14 text-white`} disabled={!hasTrack} aria-label={playing ? 'Pause' : 'Play'} onClick={togglePlay}>
         {playing ? <PauseIcon size={48} /> : <PlayIcon size={48} />}
       </button>
       <button className={skip} disabled={!hasTrack || !hasNext} aria-label="Next" onClick={next}>
@@ -108,63 +105,84 @@ function Transport() {
         aria-pressed={repeat !== 'off'}
         onClick={cycleRepeat}
       >
-        {repeat === 'one' ? <RepeatOneIcon size={30} /> : <RepeatIcon size={30} />}
+        {repeat === 'one' ? <RepeatOneIcon size={28} /> : <RepeatIcon size={28} />}
       </button>
     </div>
   );
 }
 
-// Close, browser full screen, the column toggles and the speaker, in the corners.
+function HorizontalVolumeBar() {
+  const volume = usePlayer((s) => s.volume);
+  const muted = usePlayer((s) => s.muted);
+  const { setVolume, toggleMute } = usePlayer.getState();
+  const level = muted ? 0 : volume;
+
+  return (
+    <div className="mt-3 flex items-center gap-2.5">
+      <button
+        type="button"
+        onClick={toggleMute}
+        aria-label={muted ? 'Unmute' : 'Mute'}
+        className="grid size-6 flex-none place-items-center text-white/60 transition-colors hover:text-white"
+      >
+        <Volume1 size={16} aria-hidden="true" />
+      </button>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.01}
+        value={level}
+        aria-label="Volume"
+        onChange={(e) => setVolume(Number(e.currentTarget.value))}
+        className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-white/22 accent-white"
+      />
+      <button
+        type="button"
+        onClick={() => setVolume(1)}
+        aria-label="Max volume"
+        className="grid size-6 flex-none place-items-center text-white/60 transition-colors hover:text-white"
+      >
+        <Volume2 size={16} aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
 const chromeButton =
-  'grid size-8 place-items-center rounded-full text-secondary transition-[background-color,color] duration-100 ease-in hover:bg-quinary hover:text-primary';
+  'grid size-9 place-items-center rounded-full text-white/75 transition-[background-color,color] duration-100 ease-in hover:bg-white/14 hover:text-white';
 const chrome = `absolute z-1 ${chromeButton}`;
 const artworkLayer = 'absolute inset-0 size-full rounded-[inherit] object-cover opacity-0 transition-opacity duration-300 ease-in';
-
-/** How long the pointer can rest before a playing music video hides its controls. */
 const IDLE_MS = 3000;
 
-/**
- * The full-screen player (report §7): the artwork on the left with the
- * track's names, the seek line and the transport under it; the lyrics, the
- * same am-lyrics panel as the side panel's, on the right; all over a mesh
- * gradient of the artwork's colours. With the lyrics closed, the artwork
- * column sits in the middle on its own, as Apple's does.
- *
- * A music video plays as Apple's do: on its own, it fills the window with
- * the names and transport over its foot, fading out while the pointer rests;
- * beside the lyrics or Up Next, it takes the artwork's place at 16:9.
- */
 export function FullScreenPlayer() {
   const nowPlaying = usePlayer((s) => s.nowPlaying);
-  // The queue's row for what's playing: it carries the album and each artist's channel.
-  const track = usePlayer((s) => {
-    const entry = s.queue[s.index]?.track;
-    return entry && entry.videoId === s.nowPlaying?.videoId ? entry : null;
+  const entry = usePlayer((s) => {
+    const row = s.queue[s.index];
+    return row && row.track.videoId === s.nowPlaying?.videoId ? row : null;
   });
-  // Apple's animated sleeve over the cover, as the phone's now-playing shows it.
+  const track = entry?.track ?? null;
+  const playingFrom = entry?.source?.title ?? null;
+
   const motion = useTrackMotion(nowPlaying?.title, nowPlaying?.artist, track?.album?.name);
   const { pathname } = useLocation();
   const openedAt = useRef(pathname);
   const playing = usePlayer((s) => s.status === 'playing' || s.status === 'buffering');
   const setFullScreen = useUi((s) => s.setFullScreen);
+  const setAudioOutputOpen = useUi((s) => s.setAudioOutputOpen);
+  const pipeline = useAudioPipeline();
   const video = useHasVideo(nowPlaying?.videoId);
-  // The right-hand column: the lyrics, Up Next, or nothing. Lyrics toggle bottom left, Up Next bottom right.
-  // A music video opens on its own, without the lyrics.
+
   const [panel, setPanel] = useState<'lyrics' | 'queue' | null>(() =>
     nowPlaying && useVideo.getState().videoId === nowPlaying.videoId ? null : 'lyrics',
   );
-  // Once the listener picks a column, a video arriving late doesn't take it away.
   const picked = useRef(false);
   const [idle, setIdle] = useState(false);
-  const [volumeOpen, setVolumeOpen] = useState(false);
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const browserFullScreen = useBrowserFullScreen();
   const close = useRef<HTMLButtonElement>(null);
-  // Whether this player put the page in the browser's full screen, so closing it leaves it again.
   const enteredBrowserFullScreen = useRef(false);
 
-  // The column follows the toggle alone: whether this track has lyrics, and
-  // from which provider, is the panel's own business to say.
   const showLyrics = panel === 'lyrics';
   const showQueue = panel === 'queue';
   const togglePanel = (p: 'lyrics' | 'queue') => {
@@ -197,12 +215,10 @@ export function FullScreenPlayer() {
     };
   }, []);
 
-  // A title, artist or album link went somewhere: get out of the way so the page shows.
   useEffect(() => {
     if (pathname !== openedAt.current) setFullScreen(false);
   }, [pathname, setFullScreen]);
 
-  // Nothing left to show once the queue ends.
   useEffect(() => {
     if (!nowPlaying) setFullScreen(false);
   }, [nowPlaying, setFullScreen]);
@@ -211,7 +227,6 @@ export function FullScreenPlayer() {
     if (document.fullscreenElement) {
       void document.exitFullscreen();
     } else {
-      // The whole page, not this overlay: menus and dialogs portal to <body> and must stay visible.
       void document.documentElement.requestFullscreen().then(
         () => (enteredBrowserFullScreen.current = true),
         () => undefined,
@@ -222,19 +237,14 @@ export function FullScreenPlayer() {
   if (!nowPlaying) return null;
   const { videoId, title, artist } = nowPlaying;
   const album = track?.album ?? null;
-  // With a right-hand column; on narrow windows that column fills the screen and the controls sit under it, without the artwork.
   const column = showLyrics || showQueue;
-  // A music video on its own fills the window.
   const theater = video && !column;
-  // ...and hides the controls and the pointer while it plays undisturbed.
   const hidden = theater && playing && idle ? ' pointer-events-none opacity-0' : '';
   const corner = `${chrome} transition-[background-color,color,opacity] duration-300${hidden}`;
 
   return (
     <div
-      // Over everything but menus and dialogs, which portal above it. The on-dark colours come from tokens.css (data-full-screen).
-      // --art, the artwork's side: Apple's 461px at 1440px wide, and never taller than the screen leaves room for.
-      className="fixed inset-0 z-[calc(var(--z-contextual-menus)-2)] isolate animate-enter overflow-hidden text-primary [--art:min(32vw,calc(100dvh-330px),720px)] motion-reduce:[animation-name:fade-in] max-md:[--art:min(84vw,calc(100dvh-330px),420px)]"
+      className="fixed inset-0 z-[calc(var(--z-contextual-menus)-2)] isolate flex flex-col animate-enter overflow-hidden text-primary [--art:min(32vw,calc(100dvh-390px),520px)] motion-reduce:[animation-name:fade-in] max-md:[--art:min(82vw,calc(100dvh-410px),360px)]"
       role="dialog"
       aria-modal="true"
       aria-label="Now Playing"
@@ -246,22 +256,35 @@ export function FullScreenPlayer() {
       style={theater && playing && idle ? { cursor: 'none' } : undefined}
     >
       <MeshBackdrop artworkUrl={nowPlaying.artworkUrl} playing={playing} />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 -z-1 bg-[linear-gradient(180deg,rgba(0,0,0,0.18)_0%,rgba(0,0,0,0.28)_60%,rgba(0,0,0,0.52)_100%)]"
+      />
       {theater && (
         <div className="absolute inset-0 animate-fade-in bg-black">
           <VideoSurface fit="contain" className="size-full" />
         </div>
       )}
 
-      <button ref={close} className={`${corner} top-4 left-5`} aria-label="Close" onClick={() => setFullScreen(false)}>
+      {/* Top handle + Playing from caption matching Screenshot 5 */}
+      <div className={`relative z-1 flex flex-none flex-col items-center pt-3.5 pb-1 transition-opacity duration-300${hidden}`}>
+        <div className="h-1 w-9 rounded-full bg-white/30" aria-hidden="true" />
+        {playingFrom && (
+          <p className="mt-1.5 max-w-[60vw] truncate type-caption-1 text-white/75">
+            Playing from {playingFrom}
+          </p>
+        )}
+      </div>
+
+      <button ref={close} className={`${corner} top-3.5 left-5`} aria-label="Close" onClick={() => setFullScreen(false)}>
         <X size={20} />
       </button>
-      {/* The music video's quality, just inside the full-screen button. */}
       {video && (
-        <VideoQuality className={`absolute top-[18px] z-1${hidden}${document.fullscreenEnabled ? ' right-15' : ' right-5'}`} />
+        <VideoQuality className={`absolute top-[18px] z-1${hidden}${document.fullscreenEnabled ? ' right-16' : ' right-5'}`} />
       )}
       {document.fullscreenEnabled && (
         <button
-          className={`${corner} top-4 right-5`}
+          className={`${corner} top-3.5 right-5`}
           aria-label={browserFullScreen ? 'Exit full screen' : 'Enter full screen'}
           onClick={toggleBrowserFullScreen}
         >
@@ -269,37 +292,72 @@ export function FullScreenPlayer() {
         </button>
       )}
 
-      {/* Apple's grid areas "controls lyrics": the artwork column, then the lyrics. */}
+      {/* Main layout: Sleeve + Controls on left, Synced Lyrics or Up Next on right */}
       <div
         className={
           theater
-            ? `absolute inset-x-0 bottom-0 flex justify-center bg-[linear-gradient(to_top,rgb(0_0_0/0.72),rgb(0_0_0/0.35)_55%,transparent)] px-6 pt-32 pb-16 transition-opacity duration-300${hidden}`
-            : `grid h-full items-center justify-center gap-x-[clamp(48px,7vw,144px)] px-[clamp(24px,9vw,144px)] py-16 max-md:px-6 max-md:pb-18 ${
+            ? `absolute inset-x-0 bottom-16 flex justify-center bg-[linear-gradient(to_top,rgb(0_0_0/0.72),rgb(0_0_0/0.35)_55%,transparent)] px-6 pt-32 pb-8 transition-opacity duration-300${hidden}`
+            : `grid min-h-0 flex-1 items-center justify-center gap-x-[clamp(44px,6vw,120px)] px-[clamp(24px,8vw,120px)] py-4 max-md:px-6 ${
                 column
-                  ? 'grid-cols-[var(--art)_minmax(0,38vw)] max-md:grid-cols-[minmax(0,1fr)] max-md:grid-rows-[minmax(0,1fr)_auto] max-md:items-stretch max-md:gap-y-4'
+                  ? 'grid-cols-[var(--art)_minmax(0,40vw)] max-md:grid-cols-[minmax(0,1fr)] max-md:grid-rows-[auto_minmax(0,1fr)_auto] max-md:items-stretch max-md:gap-y-2'
                   : 'grid-cols-[var(--art)]'
               }`
         }
         data-lyrics={column || undefined}
       >
+        {/* Compact mobile track header shown at top when Lyrics/Queue is open on narrow screens (Screenshot 6) */}
+        {column && (
+          <div className="hidden items-center gap-3 pb-1 max-md:flex">
+            {nowPlaying.artworkUrl && (
+              <img
+                src={sizedArtwork(nowPlaying.artworkUrl, 96)}
+                alt=""
+                width={44}
+                height={44}
+                referrerPolicy="no-referrer"
+                className="size-11 flex-none rounded-[9px] object-cover"
+              />
+            )}
+            <div className="flex min-w-0 flex-1 flex-col">
+              <div className="flex min-w-0 items-center gap-1">
+                {track?.explicit && <ExplicitBadge size={12} />}
+                <span className="truncate type-title-3-emphasized text-white">{title}</span>
+              </div>
+              <span className="truncate type-callout text-white/65">{artist}</span>
+            </div>
+            <FavoriteButton
+              videoId={nowPlaying.videoId}
+              className="grid size-9 flex-none place-items-center rounded-full bg-white/14 text-white hover:bg-white/22"
+              size={17}
+            />
+            {track && (
+              <TrackMenu
+                track={track}
+                className="grid size-9 flex-none place-items-center rounded-full bg-white/14 text-white hover:bg-white/22"
+                placement="below-end"
+              />
+            )}
+          </div>
+        )}
+
         <section
           className={
-            theater ? 'flex w-[min(720px,100%)] min-w-0 flex-col' : `flex w-(--art) min-w-0 flex-col${column ? ' max-md:order-2 max-md:w-full' : ''}`
+            theater
+              ? 'flex w-[min(720px,100%)] min-w-0 flex-col'
+              : `flex w-(--art) min-w-0 flex-col${column ? ' max-md:order-3 max-md:w-full' : ''}`
           }
           aria-label="Player"
         >
-          {/* Shrinks a touch while paused, as Apple's does. Beside a column, a music video plays here at 16:9. */}
           <div
-            className={`relative w-(--art) rounded-[10px] transition-[scale] duration-450 ease-[cubic-bezier(0.34,1.3,0.64,1)] motion-reduce:transition-none${
+            className={`relative w-(--art) rounded-[16px] transition-[scale] duration-450 ease-[cubic-bezier(0.34,1.3,0.64,1)] motion-reduce:transition-none${
               video ? ' aspect-video overflow-hidden bg-black' : ' aspect-square'
-            }${playing ? '' : ' scale-92'}${column ? ' max-md:hidden' : ''}${theater ? ' hidden' : ''}`}
+            }${playing ? '' : ' scale-94'}${column ? ' max-md:hidden' : ''}${theater ? ' hidden' : ''}`}
           >
-            {nowPlaying.artworkUrl && (
+            {nowPlaying.artworkUrl ? (
               <>
                 <img
                   key={`glow-${nowPlaying.artworkUrl}`}
-                  // The radiosity glow: a small copy, blurred and saturated, behind the artwork.
-                  className={`${artworkLayer} -z-1 translate-y-2 scale-96 blur-[20px] saturate-200 data-loaded:opacity-40`}
+                  className={`${artworkLayer} -z-1 translate-y-3 scale-98 blur-[24px] saturate-180 data-loaded:opacity-45`}
                   src={sizedArtwork(nowPlaying.artworkUrl, 60)}
                   alt=""
                   referrerPolicy="no-referrer"
@@ -308,7 +366,7 @@ export function FullScreenPlayer() {
                 />
                 <img
                   key={nowPlaying.artworkUrl}
-                  className={`${artworkLayer} bg-[#ffffff12] shadow-[0_4px_10px_#0000001a] data-loaded:opacity-100`}
+                  className={`${artworkLayer} bg-white/10 shadow-[0_14px_40px_rgba(0,0,0,0.42)] data-loaded:opacity-100`}
                   src={sizedArtwork(nowPlaying.artworkUrl, 600)}
                   alt=""
                   referrerPolicy="no-referrer"
@@ -316,8 +374,14 @@ export function FullScreenPlayer() {
                   onLoad={(e) => e.currentTarget.setAttribute('data-loaded', '')}
                 />
               </>
+            ) : (
+              <div
+                aria-hidden="true"
+                className="grid size-full place-items-center rounded-[inherit] border border-white/12 bg-[linear-gradient(145deg,rgba(255,255,255,0.12),rgba(255,255,255,0.04))] text-white/45 shadow-[0_14px_40px_rgba(0,0,0,0.36)]"
+              >
+                <LogoMark size={72} />
+              </div>
             )}
-            {/* Apple's motion artwork, over the cover once it's playing. */}
             {motion && (
               <MotionArtwork
                 key={motion.url}
@@ -329,20 +393,19 @@ export function FullScreenPlayer() {
             {video && !theater && <VideoSurface className="absolute inset-0" />}
           </div>
 
-          <div className={`flex items-center gap-3${theater ? '' : ' mt-[clamp(20px,3.2vh,32px)]'}${column ? ' max-md:mt-0' : ''}`}>
-            {/* As the mini player's: the title opens the album, each credited name its artist. */}
+          <div className={`flex items-center gap-3${theater ? '' : ' mt-5'}${column ? ' max-md:hidden' : ''}`}>
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <div className="flex min-w-0 items-center">
+              <div className="flex min-w-0 items-center gap-1.5">
+                {track?.explicit && <ExplicitBadge size={14} />}
                 <PageLink
-                  className={`min-w-0 max-w-full self-start truncate type-[600_17px/22px] ${pageLink}`}
+                  className={`min-w-0 max-w-full self-start truncate type-[700_19px/24px] text-white ${pageLink}`}
                   href={albumHref(album?.id ?? null)}
                   resolve={() => albumPageFor(videoId, album, [title, artist].filter(Boolean).join(' '))}
                 >
                   {title}
                 </PageLink>
-                {track?.explicit && <ExplicitBadge size={14} />}
               </div>
-              <span className="truncate type-title-3 text-secondary">
+              <span className="truncate type-title-3 text-white/70">
                 {artist && <Credits videoId={videoId} line={artist} artists={track?.artists ?? []} className={pageLink} />}
                 {artist && album?.name && ' · '}
                 {album?.name && (
@@ -359,13 +422,13 @@ export function FullScreenPlayer() {
             </div>
             <FavoriteButton
               videoId={nowPlaying.videoId}
-              className="grid size-8 flex-none place-items-center rounded-full bg-quinary text-primary hover:bg-quaternary"
+              className="grid size-9 flex-none place-items-center rounded-full bg-white/14 text-white hover:bg-white/24"
               size={18}
             />
             {track && (
               <TrackMenu
                 track={track}
-                className="grid size-8 flex-none place-items-center rounded-full bg-quinary text-primary hover:bg-quaternary"
+                className="grid size-9 flex-none place-items-center rounded-full bg-white/14 text-white hover:bg-white/24"
                 placement="above-end"
               />
             )}
@@ -373,17 +436,17 @@ export function FullScreenPlayer() {
 
           <Scrubber />
           <Transport />
+          <HorizontalVolumeBar />
         </section>
 
         {showLyrics && (
-          <section className="flex min-h-0 animate-fade-in self-stretch" aria-label="Lyrics">
+          <section className="flex min-h-0 animate-fade-in self-stretch max-md:order-2" aria-label="Lyrics">
             <LyricsPanel variant="full" />
           </section>
         )}
         {showQueue && (
-          // Up Next in the right-hand column: the side panel's list, laid out as a column.
           <section
-            className="flex min-h-0 animate-fade-in flex-col self-stretch [mask-image:linear-gradient(180deg,#000_calc(100%-80px),transparent)]"
+            className="flex min-h-0 animate-fade-in flex-col self-stretch [mask-image:linear-gradient(180deg,#000_calc(100%-80px),transparent)] max-md:order-2"
             aria-label="Up Next"
           >
             <UpNext />
@@ -391,33 +454,52 @@ export function FullScreenPlayer() {
         )}
       </div>
 
-      <button
-        className={`${corner} bottom-5 left-5 aria-pressed:text-primary`}
-        aria-label="Lyrics"
-        aria-pressed={showLyrics}
-        onClick={() => togglePanel('lyrics')}
-      >
-        {showLyrics ? <LyricsActiveIcon size={18} /> : <LyricsIcon size={18} />}
-      </button>
-      {/* Up Next, with the speaker beside it: the level slides in over Up Next, as it does in the pill. */}
-      <div
-        className={`group/actions absolute right-5 bottom-5 z-1 flex items-center [--volume-gap:36px] transition-opacity duration-300${hidden}`}
-        data-volume-open={volumeOpen || undefined}
-        onPointerLeave={() => setVolumeOpen(false)}
-        onBlur={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setVolumeOpen(false);
-        }}
-      >
+      {/* Bottom 3-icon toolbar + active device label matching Screenshots 5 & 6 */}
+      <footer className={`relative z-1 flex flex-none flex-col items-center gap-1 pt-1 pb-4 transition-opacity duration-300${hidden}`}>
+        <div className="flex w-[min(320px,82vw)] items-center justify-between px-4">
+          <button
+            type="button"
+            className={`grid size-10 place-items-center rounded-[11px] transition-colors ${
+              showLyrics ? 'bg-white/22 text-white' : 'text-white/70 hover:bg-white/12 hover:text-white'
+            }`}
+            aria-label="Lyrics"
+            aria-pressed={showLyrics}
+            onClick={() => togglePanel('lyrics')}
+          >
+            {showLyrics ? <LyricsActiveIcon size={19} /> : <LyricsIcon size={19} />}
+          </button>
+
+          <button
+            type="button"
+            className="grid size-10 place-items-center rounded-[11px] text-white/70 transition-colors hover:bg-white/12 hover:text-white"
+            aria-label="Audio output"
+            title="Audio output & Signal Path"
+            onClick={() => setAudioOutputOpen(true)}
+          >
+            <Cast size={19} strokeWidth={2} aria-hidden="true" />
+          </button>
+
+          <button
+            type="button"
+            className={`grid size-10 place-items-center rounded-[11px] transition-colors ${
+              showQueue ? 'bg-white/22 text-white' : 'text-white/70 hover:bg-white/12 hover:text-white'
+            }`}
+            aria-label="Up Next"
+            aria-pressed={showQueue}
+            onClick={() => togglePanel('queue')}
+          >
+            <UpNextIcon size={19} />
+          </button>
+        </div>
+
         <button
-          className={`${chromeButton} ${fadeForVolume} aria-pressed:text-primary`}
-          aria-label="Up Next"
-          aria-pressed={showQueue}
-          onClick={() => togglePanel('queue')}
+          type="button"
+          onClick={() => setAudioOutputOpen(true)}
+          className="rounded-pill px-3 py-0.5 type-caption-1 text-white/60 transition-colors hover:bg-white/10 hover:text-white"
         >
-          <UpNextIcon size={18} />
+          {pipeline.activeDeviceName}
         </button>
-        <VolumeControl open={volumeOpen} onOpen={() => setVolumeOpen(true)} className={chromeButton} iconSize={18} />
-      </div>
+      </footer>
     </div>
   );
 }

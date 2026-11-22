@@ -102,6 +102,14 @@
       opacity: 0.7;
     }
   }
+  @keyframes pipeline-pulse {
+    from {
+      transform: translateY(-56px);
+    }
+    to {
+      transform: translateY(480px);
+    }
+  }
 }
 
 /*

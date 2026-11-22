@@ -10,6 +10,10 @@ interface UiState {
   closeSidePanel: () => void;
   fullScreen: boolean;
   setFullScreen: (open: boolean) => void;
+  audioOutputOpen: boolean;
+  setAudioOutputOpen: (open: boolean) => void;
+  audioPipelineOpen: boolean;
+  setAudioPipelineOpen: (open: boolean) => void;
   drawerOpen: boolean;
   setDrawerOpen: (open: boolean) => void;
   installBannerDismissed: boolean;
@@ -40,6 +44,10 @@ export const useUi = create<UiState>()((set) => ({
   closeSidePanel: () => set({ sidePanel: null }),
   fullScreen: false,
   setFullScreen: (fullScreen) => set({ fullScreen }),
+  audioOutputOpen: false,
+  setAudioOutputOpen: (audioOutputOpen) => set({ audioOutputOpen }),
+  audioPipelineOpen: false,
+  setAudioPipelineOpen: (audioPipelineOpen) => set({ audioPipelineOpen }),
   drawerOpen: false,
   setDrawerOpen: (drawerOpen) => set({ drawerOpen }),
   installBannerDismissed: sessionStorage.getItem(BANNER_KEY) === '1',
