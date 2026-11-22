@@ -1,0 +1,19 @@
+[package]
+name = "core-youtube"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
+http.workspace = true
+parking_lot.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true

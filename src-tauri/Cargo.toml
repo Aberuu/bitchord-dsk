@@ -1,0 +1,42 @@
+[package]
+name = "bitchord-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "BitChord Desktop music player for Windows"
+
+[lib]
+name = "bitchord_desktop_lib"
+crate-type = ["rlib"]
+
+[features]
+default = []
+custom-protocol = ["tauri/custom-protocol"]
+updater = ["dep:tauri-plugin-updater"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow.workspace = true
+core-auth = { path = "../crates/core-auth" }
+core-downloads = { path = "../crates/core-downloads" }
+core-integrations = { path = "../crates/core-integrations" }
+core-lyrics = { path = "../crates/core-lyrics" }
+core-playback = { path = "../crates/core-playback" }
+core-youtube = { path = "../crates/core-youtube" }
+parking_lot.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = ["tray-icon", "image-png", "devtools", "unstable"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-updater = { version = "2", optional = true }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+window-vibrancy = "0.6"

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "BitChord",
+  "version": "0.1.0",
+  "identifier": "in.bitchord.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm --dir web --filter @bitchord/app dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "pnpm --dir web --filter @bitchord/app build",
+    "frontendDist": "../web/app/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "BitChord",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 620,
+        "decorations": false,
+        "transparent": true,
+        "resizable": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' ipc: http://ipc.localhost https://ipc.localhost http://127.0.0.1:*; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https: http://127.0.0.1:*; media-src 'self' data: blob: https: http://127.0.0.1:*; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:* https: wss:; worker-src 'self' blob:;"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      }
+    }
+  }
+}
