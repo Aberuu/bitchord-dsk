@@ -237,7 +237,15 @@ function useUngranted(): string[] {
 const NO_STATES: Partial<Record<LyricsSourceId, SourceState>> = {};
 
 /** The provider picker: which provider these lyrics are from, and the others' answers for this track. */
-function ProviderPicker({ current, full }: { current: LyricsSourceId | null; full: boolean }) {
+function ProviderPicker({
+  current,
+  variant,
+  toolbarActions,
+}: {
+  current: LyricsSourceId | null;
+  variant: 'panel' | 'full' | 'page';
+  toolbarActions?: React.ReactNode;
+}) {
   const videoId = usePlayer((s) => s.nowPlaying?.videoId ?? '');
   const states = useLyricsUi((s) => s.states[videoId]) ?? NO_STATES;
   const picked = useLyricsUi((s) => s.picked[videoId]);
@@ -248,16 +256,17 @@ function ProviderPicker({ current, full }: { current: LyricsSourceId | null; ful
   const label = current ? sourceById(current)?.label : 'Lyrics';
 
   return (
-    // In full screen the picker sits quietly above the lines, shown on hover.
     <div
       className={
-        full
-          ? 'flex items-center justify-between pb-1 opacity-0 transition-opacity duration-200 group-hover/panel:opacity-100 focus-within:opacity-100'
-          : 'flex items-center justify-between px-4 pt-4 pb-1'
+        variant === 'page'
+          ? 'mx-auto mb-3 flex items-center gap-1.5 rounded-pill border border-white/14 bg-black/28 px-2.5 py-1 shadow-sm backdrop-blur-md'
+          : variant === 'full'
+            ? 'flex items-center justify-between pb-1 opacity-0 transition-opacity duration-200 group-hover/panel:opacity-100 focus-within:opacity-100'
+            : 'flex items-center justify-between px-4 pt-4 pb-1'
       }
     >
       <button
-        className="inline-flex items-center gap-1 rounded-[8px] px-2 py-1 type-callout-emphasized text-secondary hover:bg-quinary"
+        className="inline-flex items-center gap-1 rounded-pill px-2.5 py-1 type-callout-emphasized text-secondary transition-colors hover:bg-quinary hover:text-primary"
         aria-haspopup="menu"
         onClick={(e) => setAnchor(e.currentTarget)}
       >
@@ -265,12 +274,14 @@ function ProviderPicker({ current, full }: { current: LyricsSourceId | null; ful
         <ChevronDown size={14} />
       </button>
       <button
-        className="grid size-7 place-items-center rounded-[8px] text-secondary hover:bg-quinary"
+        className="grid size-7 place-items-center rounded-full text-secondary transition-colors hover:bg-quinary hover:text-primary"
         aria-label="Lyric settings"
+        title="Lyric settings"
         onClick={() => setSettings(true)}
       >
-        <Settings2 size={16} />
+        <Settings2 size={15} />
       </button>
+      {toolbarActions}
       {anchor && (
         <Menu anchor={anchor} placement="below-end" onClose={close} label="Lyrics provider">
           <MenuItem checked={!picked} onSelect={() => (close(), pick(videoId, null))}>
@@ -372,21 +383,26 @@ const fullSizes =
 
 /**
  * The lyrics, with their provider picker and empty states: the side panel
- * (report §7), and the right-hand column of the full-screen player, where the
- * lines are larger and the player's mesh stands in for the Canvas.
+ * (report §7), the dedicated /lyrics page, and the right-hand column of the
+ * full-screen player, where the lines are larger and the player's mesh stands
+ * in for the Canvas.
  */
-export function LyricsPanel({ variant = 'panel' }: { variant?: 'panel' | 'full' }) {
+export function LyricsPanel({
+  variant = 'panel',
+  toolbarActions,
+}: {
+  variant?: 'panel' | 'full' | 'page';
+  toolbarActions?: React.ReactNode;
+}) {
   const lyrics = useLyrics();
   const hasTrack = usePlayer((s) => s.nowPlaying !== null);
   const videoId = usePlayer((s) => s.nowPlaying?.videoId ?? '');
-  // A provider picked by hand that came back with nothing is named in the
-  // empty state: the lyrics didn't go missing, this one provider hasn't got them.
   const picked = useLyricsUi((s) => s.picked[videoId]);
   const ungranted = useUngranted();
   const canvas = useCanvas();
   const fontReady = useLyricFont();
   const result = lyrics.data;
-  const full = variant === 'full';
+  const full = variant === 'full' || variant === 'page';
   const empty = full
     ? 'flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center type-title-3 text-secondary'
     : 'flex flex-1 flex-col items-center justify-center gap-2 px-6 pb-20 text-center type-[400_12px/16px] text-secondary';
@@ -395,8 +411,7 @@ export function LyricsPanel({ variant = 'panel' }: { variant?: 'panel' | 'full' 
   return (
     <div className={full ? `${panel} ${fullSizes}` : panel}>
       {canvas && variant === 'panel' && <CanvasBackdrop url={canvas} />}
-      <ProviderPicker current={result?.source ?? null} full={full} />
-      {/* Only worth raising when nothing was found: then the hosts behind the extension might have it. */}
+      <ProviderPicker current={result?.source ?? null} variant={variant} toolbarActions={toolbarActions} />
       {ungranted.length > 0 && !result && !lyrics.isFetching && <PermissionNotice origins={ungranted} />}
       {!hasTrack ? (
         <div className={empty}>

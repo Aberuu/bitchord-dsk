@@ -404,12 +404,15 @@ name = "bitchord-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "core-auth",
  "core-downloads",
  "core-integrations",
  "core-lyrics",
  "core-playback",
+ "core-stats",
  "core-youtube",
+ "directories",
  "parking_lot",
  "reqwest 0.12.28",
  "serde",
@@ -967,6 +970,20 @@ dependencies = [
  "symphonia",
  "tracing",
  "wasapi",
+]
+
+[[package]]
+name = "core-stats"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "core-auth",
+ "parking_lot",
+ "regex",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

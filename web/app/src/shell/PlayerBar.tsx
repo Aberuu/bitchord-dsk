@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useLocation, useNavigate } from 'react-router';
 import {
   BackwardIcon,
   ForwardIcon,
@@ -19,20 +20,20 @@ import { Lcd } from './Lcd';
 import { fadeForVolume, VolumeControl } from './VolumeControl';
 
 const control = 'grid place-items-center rounded-[6px] disabled:opacity-40';
-// Shuffle and repeat: secondary, and the key colour when on, as Apple's toggles.
 const toggle = `${control} size-7 text-secondary aria-pressed:text-key`;
 const transport = `${control} size-7 text-primary`;
 const action = 'grid h-7 w-6 place-items-center rounded-[4px] text-primary aria-pressed:text-key';
-// The actions the volume level slides in over: they fade out while it's open.
 const fading = `${action} ${fadeForVolume}`;
 
 /** The floating glass player pill (report §1). */
 export function PlayerBar() {
+  const navigate = useNavigate();
+  const location = useLocation();
   const sidePanel = useUi((s) => s.sidePanel);
   const toggleSidePanel = useUi((s) => s.toggleSidePanel);
+  const closeSidePanel = useUi((s) => s.closeSidePanel);
   const hasTrack = usePlayer((s) => s.nowPlaying !== null);
   const videoId = usePlayer((s) => s.nowPlaying?.videoId ?? null);
-  // The queue's entry for what's playing: the track menu needs the full track.
   const track = usePlayer((s) => {
     const entry = s.queue[s.index]?.track;
     return entry && entry.videoId === s.nowPlaying?.videoId ? entry : null;
@@ -43,6 +44,20 @@ export function PlayerBar() {
   const repeat = usePlayer((s) => s.repeat);
   const { togglePlay, next, previous, toggleShuffle, cycleRepeat } = usePlayer.getState();
   const [volumeOpen, setVolumeOpen] = useState(false);
+  const onLyricsPage = location.pathname === '/lyrics';
+
+  const handleToggleLyrics = () => {
+    closeSidePanel();
+    if (onLyricsPage) {
+      if (window.history.length > 1) {
+        void navigate(-1);
+      } else {
+        void navigate('/home');
+      }
+    } else {
+      void navigate('/lyrics');
+    }
+  };
 
   return (
     // The side panel overlays the page; the pill re-centres in what's left.
@@ -94,9 +109,13 @@ export function PlayerBar() {
         >
           <FavoriteButton videoId={videoId} className={fading} />
           {track && <TrackMenu track={track} className={fading} placement="above-end" />}
-          {/* Always here: the panel itself says whether this track has lyrics, and from where. */}
-          <button className={fading} aria-label="Lyrics" aria-pressed={sidePanel === 'lyrics'} onClick={() => toggleSidePanel('lyrics')}>
-            {sidePanel === 'lyrics' ? <LyricsActiveIcon size={18} /> : <LyricsIcon size={18} />}
+          <button
+            className={fading}
+            aria-label="Lyrics"
+            aria-pressed={onLyricsPage}
+            onClick={handleToggleLyrics}
+          >
+            {onLyricsPage ? <LyricsActiveIcon size={18} /> : <LyricsIcon size={18} />}
           </button>
           <button
             className={fading}

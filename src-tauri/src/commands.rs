@@ -1,6 +1,7 @@
 use crate::auth_windows::{open_discord_login, open_spotify_login, open_youtube_login};
 use crate::AppState;
-use core_auth::YtFetchParams;
+use base64::Engine;
+use core_auth::{app_data_dir, YtFetchParams};
 use core_downloads::{DownloadRequest, DownloadedTrack, LocalTrack};
 use core_integrations::{
     DiscordNowPlaying, DiscordPresenceOptions, LastFmTokenAuth, ScrobbleConfigUpdate,
@@ -8,10 +9,14 @@ use core_integrations::{
 };
 use core_lyrics::HttpRequestParams;
 use core_playback::{AudioDeviceInfo, AudioSettings, NativePlaybackSnapshot};
+use core_stats::{
+    save_file_bytes, BackupSummary, ListeningSampleInput, ReplayPeriod, ReplaySummary,
+};
+use directories::UserDirs;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -258,7 +263,7 @@ pub async fn bridge_call(
 }
 
 #[tauri::command]
-pub fn open_yt_sign_in(app: AppHandle) -> Result<(), String> {
+pub async fn open_yt_sign_in(app: AppHandle) -> Result<(), String> {
     open_youtube_login(&app).map_err(|e| e.to_string())
 }
 
@@ -534,10 +539,90 @@ pub async fn check_for_updates(app: AppHandle) -> Result<UpdateCheckResult, Stri
 }
 
 #[tauri::command]
+pub fn stats_record_sample(
+    sample: ListeningSampleInput,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let counts = sample.counts_as_play;
+    state
+        .stats
+        .record_sample(sample)
+        .map_err(|e| e.to_string())?;
+    if counts {
+        let _ = app.emit("stats://updated", json!({}));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn stats_flush(state: State<'_, AppState>) -> Result<(), String> {
+    state.stats.flush().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn stats_get_summary(
+    period: ReplayPeriod,
+    state: State<'_, AppState>,
+) -> Result<ReplaySummary, String> {
+    state.stats.summary(period).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn stats_export_backup(state: State<'_, AppState>) -> Result<String, String> {
+    state.stats.export_backup_json().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn stats_import_backup(
+    raw_json: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<BackupSummary, String> {
+    let summary = state
+        .stats
+        .import_backup_json(&raw_json)
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("stats://updated", json!({}));
+    Ok(summary)
+}
+
+#[tauri::command]
+pub fn replay_save_file(file_name: String, base64_bytes: String) -> Result<String, String> {
+    let safe_name = file_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let target_dir = UserDirs::new()
+        .and_then(|u| u.download_dir().map(PathBuf::from))
+        .or_else(|| app_data_dir().ok())
+        .ok_or_else(|| "Could not locate Downloads directory".to_string())?;
+    let path = target_dir.join(if safe_name.is_empty() {
+        "bitchord-export.bin".to_string()
+    } else {
+        safe_name
+    });
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_bytes.trim())
+        .map_err(|e| format!("Invalid export data: {e}"))?;
+    save_file_bytes(&path, &bytes).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
 pub fn open_devtools_window(app: AppHandle) {
     #[cfg(debug_assertions)]
-    if let Some(w) = app.get_webview_window("main") {
-        w.open_devtools();
+    {
+        use tauri::Manager;
+        if let Some(w) = app.get_webview_window("main") {
+            w.open_devtools();
+        }
     }
     #[cfg(not(debug_assertions))]
     let _ = app;

@@ -26,12 +26,14 @@ interface NavItem {
   to: string;
   label: string;
   Icon: (props: NavIconProps) => React.ReactNode;
+  end?: boolean;
 }
 
 const PRIMARY: NavItem[] = [
-  { to: '/search', label: 'Search', Icon: SearchIcon },
   { to: '/home', label: 'Home', Icon: HomeIcon },
+  { to: '/search', label: 'Search', Icon: SearchIcon },
   { to: '/new', label: 'New', Icon: NewIcon },
+  { to: '/library', label: 'Library', Icon: AlbumsIcon, end: true },
 ];
 
 const LIBRARY_ICONS: Record<Exclude<LibrarySection, 'playlists'>, NavItem['Icon']> = {
@@ -58,9 +60,9 @@ const list = 'flex flex-col';
 function NavList({ items, onNavigate }: { items: NavItem[]; onNavigate: () => void }) {
   return (
     <ul className={list}>
-      {items.map(({ to, label, Icon }) => (
+      {items.map(({ to, label, Icon, end }) => (
         <li key={to}>
-          <PrefetchNavLink to={to} className={item} onClick={onNavigate}>
+          <PrefetchNavLink to={to} end={end} className={item} onClick={onNavigate}>
             <Icon size={24} className={icon} />
             <span className={navLabel}>{label}</span>
           </PrefetchNavLink>
@@ -74,7 +76,7 @@ function LibraryNav({ onNavigate }: { onNavigate: () => void }) {
   const playlists = useLibraryPlaylists();
   return (
     <>
-      <h2 className={sectionHeader}>Library</h2>
+      <h2 className={sectionHeader}>YouTube Music</h2>
       <NavList items={LIBRARY} onNavigate={onNavigate} />
       <h2 className={sectionHeader}>Playlists</h2>
       <ul className={list}>

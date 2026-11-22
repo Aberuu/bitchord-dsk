@@ -19,12 +19,15 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 anyhow.workspace = true
+base64.workspace = true
 core-auth = { path = "../crates/core-auth" }
 core-downloads = { path = "../crates/core-downloads" }
 core-integrations = { path = "../crates/core-integrations" }
 core-lyrics = { path = "../crates/core-lyrics" }
 core-playback = { path = "../crates/core-playback" }
+core-stats = { path = "../crates/core-stats" }
 core-youtube = { path = "../crates/core-youtube" }
+directories.workspace = true
 parking_lot.workspace = true
 reqwest.workspace = true
 serde.workspace = true

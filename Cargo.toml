@@ -7,6 +7,7 @@ members = [
     "crates/core-integrations",
     "crates/core-downloads",
     "crates/core-playback",
+    "crates/core-stats",
     "src-tauri",
 ]
 
@@ -20,6 +21,7 @@ anyhow = "1"
 axum = "0.8"
 base64 = "0.22"
 bytes = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 cpal = "0.15"
 directories = "6"
 futures-util = "0.3"

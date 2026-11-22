@@ -22,6 +22,7 @@ import {
   type QueueSource,
 } from '@/playback/queue/timeline';
 import { trackLog } from '@/playback/trackLog';
+import { DEFAULT_EQ_CONFIG, type EqConfig } from '@/playback/webAudioEq';
 import type { LoadedTrack, StreamStats, YouTubeEngine } from '@/playback/youtube/engine';
 import type { AutomixGraph, AutoDJSnapshot } from '@/playback/automix';
 
@@ -60,6 +61,8 @@ interface Settings {
   showNerdStats: boolean;
   /** Playback speed multiplier (0.5x to 2.0x). */
   playbackRate: number;
+  /** 10-slot Web Audio & native Rust equalizer configuration. */
+  eq: EqConfig;
 }
 
 interface PlayerState extends Settings {
@@ -110,6 +113,7 @@ interface PlayerState extends Settings {
   setShowNerdStats: (on: boolean) => void;
   setPlaybackRate: (rate: number) => void;
   setSleepTimer: (option: number | 'track' | null) => void;
+  setEq: (patch: Partial<EqConfig>) => void;
 }
 
 // ---- Settings, kept across visits ---------------------------------------------------
@@ -126,21 +130,27 @@ const DEFAULT_SETTINGS: Settings = {
   automixBars: 16,
   showNerdStats: false,
   playbackRate: 1,
+  eq: DEFAULT_EQ_CONFIG,
 };
 
 function loadSettings(): Settings {
   try {
-    return { ...DEFAULT_SETTINGS, ...(JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') as Partial<Settings>) };
+    const parsed = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') as Partial<Settings>;
+    return {
+      ...DEFAULT_SETTINGS,
+      ...parsed,
+      eq: { ...DEFAULT_EQ_CONFIG, ...(parsed.eq ?? {}) },
+    };
   } catch {
     return DEFAULT_SETTINGS;
   }
 }
 
 function saveSettings(state: Settings) {
-  const { shuffle, repeat, autoplay, volume, muted, crossfadeSec, automix, automixBars, showNerdStats, playbackRate } = state;
+  const { shuffle, repeat, autoplay, volume, muted, crossfadeSec, automix, automixBars, showNerdStats, playbackRate, eq } = state;
   localStorage.setItem(
     SETTINGS_KEY,
-    JSON.stringify({ shuffle, repeat, autoplay, volume, muted, crossfadeSec, automix, automixBars, showNerdStats, playbackRate }),
+    JSON.stringify({ shuffle, repeat, autoplay, volume, muted, crossfadeSec, automix, automixBars, showNerdStats, playbackRate, eq }),
   );
 }
 
@@ -298,6 +308,7 @@ function ensureAutomix(): Promise<AutomixGraph | null> {
       (snap) => usePlayer.setState({ automixState: snap }),
     );
     graph = built;
+    built.eq.applyConfig(usePlayer.getState().eq);
     applyVolumes();
     if (import.meta.env.DEV) Object.assign(window, { __bcAutomix: built, __bcAnalyzer: analyzer });
     return built;
@@ -361,18 +372,25 @@ function automixHandoff() {
   intent();
 }
 
-/** Starts or stops the mix loop to match the setting; the first start builds the graph. */
+/** Starts or stops the mix loop to match the setting; builds the Web Audio graph when AutoMix or EQ is enabled. */
 function syncAutomix() {
-  if (!usePlayer.getState().automix) {
+  const { automix, eq } = usePlayer.getState();
+  if (!automix && !eq.enabled) {
     graph?.dj.stop();
+    graph?.eq.applyConfig(eq);
     return;
   }
   void ensureAutomix().then((g) => {
-    const { automix, automixBars } = usePlayer.getState();
-    if (!g || !automix) return;
+    const state = usePlayer.getState();
+    if (!g) return;
     void g.ctx.resume();
-    g.dj.transitionBars = automixBars;
-    g.dj.start();
+    g.eq.applyConfig(state.eq);
+    if (state.automix) {
+      g.dj.transitionBars = state.automixBars;
+      g.dj.start();
+    } else {
+      g.dj.stop();
+    }
   });
 }
 
@@ -674,6 +692,27 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
       set({ sleepTimerEndMs: Date.now() + option * 60_000, sleepAfterTrack: false });
     }
   },
+
+  setEq(patch) {
+    const nextEq: EqConfig = { ...get().eq, ...patch };
+    set({ eq: nextEq });
+    saveSettings(get());
+    if (graph) {
+      graph.eq.applyConfig(nextEq);
+    } else if (nextEq.enabled) {
+      syncAutomix();
+    }
+    if (isTauriDesktop()) {
+      void desktopApi
+        .audioSnapshot()
+        .then((snap) => desktopApi.audioUpdateSettings({ ...snap.settings, eq: nextEq }))
+        .then((updated) => {
+          queryClient.setQueryData(['desktop', 'audio', 'snapshot'], updated);
+          set({ bitPerfectStatus: updated.bitPerfect });
+        })
+        .catch(() => {});
+    }
+  },
 }));
 
 // For browser-driven tests, next to __bcAudio.
@@ -761,6 +800,7 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
       });
       updateMediaSession(usePlayer.getState().nowPlaying);
       afterTrackStarted();
+      syncAutomix();
       return;
     }
 

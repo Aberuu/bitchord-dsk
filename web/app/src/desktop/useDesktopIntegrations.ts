@@ -3,8 +3,10 @@ import { artworkAtPixels } from '@/lib/artwork';
 import { getPlayhead, onTrackEnded, usePlayer } from '@/state/player';
 import { useUi } from '@/state/ui';
 import { desktopApi, initDesktopBootstrap, isTauriDesktop } from './tauriBridge';
+import { useListeningRecorder } from './useListeningRecorder';
 
 export function useDesktopIntegrations(): void {
+  useListeningRecorder();
   const theme = useUi((s) => s.theme);
   const nowPlaying = usePlayer((s) => s.nowPlaying);
   const status = usePlayer((s) => s.status);

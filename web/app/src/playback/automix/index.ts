@@ -1,3 +1,4 @@
+import { WebAudioEqualizer } from '../webAudioEq';
 import { AutoDJ, type AutomixHost, type AutoDJSnapshot } from './engine/autodj';
 import { Deck } from './engine/deck';
 import { LoopDeck } from './engine/loopDeck';
@@ -15,6 +16,8 @@ export interface AutomixGraph {
   ctx: AudioContext;
   /** The user's volume and mute. */
   master: GainNode;
+  /** 10-slot Web Audio parametric & tone equalizer + limiter on the master bus. */
+  eq: WebAudioEqualizer;
   decks: Deck[];
   dj: AutoDJ;
 }
@@ -23,7 +26,7 @@ export interface AutomixGraph {
  * Routes the player's two <audio> elements through Web Audio, one AutoMix
  * deck each, and builds the mix loop over them. A media element can be
  * routed only once, so this is for the life of the page; from then on the
- * elements stay at volume 1 and the graph carries volume and crossfades.
+ * elements stay at volume 1 and the graph carries volume, EQ, and crossfades.
  */
 export function createAutomixGraph(
   audios: HTMLAudioElement[],
@@ -32,12 +35,12 @@ export function createAutomixGraph(
 ): AutomixGraph {
   const ctx = new AudioContext({ latencyHint: 'playback' });
   void ctx.resume();
+  const eq = new WebAudioEqualizer(ctx);
   const master = new GainNode(ctx, { gain: 1 });
-  master.connect(ctx.destination);
+  master.connect(eq.input);
   const decks = audios.map((audio, n) => new Deck(n === 0 ? 'A' : 'B', ctx, audio, master));
-  // the loop mix's stretch decks (AutoMix's own), built the first time a loop mix is prepared
   let loops: Promise<[LoopDeck, LoopDeck]> | null = null;
   const loopDecks = () => (loops ??= Promise.all([LoopDeck.create(ctx, master), LoopDeck.create(ctx, master)]));
   const dj = new AutoDJ({ ctx, loopDecks, ...host(decks) }, onUpdate);
-  return { ctx, master, decks, dj };
+  return { ctx, master, eq, decks, dj };
 }

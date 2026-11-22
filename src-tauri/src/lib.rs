@@ -7,6 +7,7 @@ use core_downloads::LibraryStore;
 use core_integrations::{DiscordService, ScrobbleService, SmtcController};
 use core_lyrics::LyricsProxy;
 use core_playback::NativeAudioEngine;
+use core_stats::ListeningStatsStore;
 use core_youtube::LoopbackProxy;
 use parking_lot::Mutex;
 use serde_json::json;
@@ -23,6 +24,7 @@ pub struct AppState {
     pub discord: Arc<DiscordService>,
     pub scrobble: Arc<ScrobbleService>,
     pub library: Arc<LibraryStore>,
+    pub stats: Arc<ListeningStatsStore>,
     pub playback: Arc<NativeAudioEngine>,
     pub smtc: Mutex<Option<SmtcController>>,
     pub vibrancy_mode: Mutex<String>,
@@ -45,6 +47,7 @@ pub fn run() {
     let lyrics = Arc::new(LyricsProxy::new(http.clone()));
     let scrobble = Arc::new(ScrobbleService::new(Arc::clone(&vault), http.clone()));
     let library = Arc::new(LibraryStore::open_default(http.clone()).expect("open library database"));
+    let stats = Arc::new(ListeningStatsStore::open_default().expect("open listening stats store"));
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -111,6 +114,7 @@ pub fn run() {
                 discord,
                 scrobble: Arc::clone(&scrobble),
                 library: Arc::clone(&library),
+                stats: Arc::clone(&stats),
                 playback,
                 smtc: Mutex::new(smtc_ctrl),
                 vibrancy_mode: Mutex::new(vibrancy),
@@ -131,6 +135,7 @@ pub fn run() {
                         api.prevent_close();
                         let _ = window.hide();
                     } else {
+                        let _ = state.stats.flush();
                         state.discord.shutdown();
                         state.playback.stop();
                     }
@@ -172,6 +177,12 @@ pub fn run() {
             commands::audio_stop,
             commands::audio_seek,
             commands::audio_set_volume,
+            commands::stats_record_sample,
+            commands::stats_flush,
+            commands::stats_get_summary,
+            commands::stats_export_backup,
+            commands::stats_import_backup,
+            commands::replay_save_file,
             commands::check_for_updates,
             commands::open_devtools_window,
         ])

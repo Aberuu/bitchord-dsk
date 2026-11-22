@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { ChevronRight, Radio, RefreshCw, SlidersHorizontal, Users } from 'lucide-react';
+import { ChevronRight, Clock, Radio, RefreshCw, SlidersHorizontal, Users } from 'lucide-react';
 import { lazy, Suspense, useState, type ComponentType, type ReactNode } from 'react';
 import { SiApplemusic, SiDiscord, SiSpotify, SiYoutubemusic } from 'react-icons/si';
 import { PageHeader } from '@/components/PageHeader';
@@ -344,6 +344,16 @@ export default function SettingsPage() {
           <AppleMusicToggles />
         </section>
         <p className={settingsUi.footer}>From Apple Music public pages. No Apple Music account or sign-in needed.</p>
+
+        <h2 className={settingsUi.sectionHeader}>Replay & Listening Stats</h2>
+        <section className={settingsUi.group}>
+          <LinkRow
+            to="/replay"
+            icon={<Glyph Icon={Clock} color="#d60017" />}
+            title="Your Listening Experience (Replay)"
+            value="Cards, charts, backup JSON & poster PNG"
+          />
+        </section>
 
         <h2 className={settingsUi.sectionHeader}>Listen Together</h2>
         <section className={settingsUi.group}>
