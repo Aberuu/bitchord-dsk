@@ -7,6 +7,7 @@ import {
   type AudioPipelineSummary,
   type PipelineMetricRow,
 } from './audioPipelineData';
+import { DESKTOP_AUDIO_DEVICES_KEY, DESKTOP_AUDIO_SNAPSHOT_KEY } from './useDesktopAudioDevices';
 
 export type { AudioPipelineStage, AudioPipelineSummary, PipelineMetricRow };
 
@@ -21,14 +22,14 @@ export function useAudioPipeline(): AudioPipelineSummary {
   const bitPerfect = usePlayer((s) => s.bitPerfectStatus);
 
   const snapQuery = useQuery({
-    queryKey: ['desktop', 'audio', 'snapshot'],
+    queryKey: DESKTOP_AUDIO_SNAPSHOT_KEY,
     queryFn: () => desktopApi.audioSnapshot(),
     enabled: desktop,
     staleTime: 10_000,
   });
 
   const devicesQuery = useQuery({
-    queryKey: ['desktop', 'audio', 'devices'],
+    queryKey: DESKTOP_AUDIO_DEVICES_KEY,
     queryFn: () => desktopApi.audioListDevices(),
     enabled: desktop,
     staleTime: 30_000,

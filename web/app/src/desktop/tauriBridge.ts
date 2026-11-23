@@ -13,6 +13,7 @@ import {
 
 export interface DesktopBootstrap {
   proxyBaseUrl: string;
+  audioTapUrl: string;
   vibrancyMode: string;
   minimizeToTray: boolean;
   version: string;
@@ -121,6 +122,8 @@ export interface LocalTrack {
 
 export type OutputMode = 'shared' | 'wasapi_exclusive' | 'asio';
 
+export type AudioDeviceKind = 'speakers' | 'headphones' | 'usb_dac' | 'bluetooth' | 'hdmi' | 'other';
+
 export interface AudioDeviceInfo {
   id: string;
   name: string;
@@ -128,6 +131,8 @@ export interface AudioDeviceInfo {
   backend: string;
   supportsExclusive: boolean;
   maxSampleRateHz: number;
+  kind: AudioDeviceKind;
+  isUsbDac: boolean;
 }
 
 export interface BitPerfectStatus {
@@ -183,6 +188,7 @@ export interface AudioSettings {
 
 export interface NativePlaybackSnapshot {
   active: boolean;
+  tapActive: boolean;
   status: string;
   trackId: string | null;
   positionSec: number;
@@ -326,6 +332,11 @@ export const desktopApi = {
   audioStop: () => invoke<void>('audio_stop'),
   audioSeek: (seconds: number) => invoke<void>('audio_seek', { seconds }),
   audioSetVolume: (volume: number, muted: boolean) => invoke<void>('audio_set_volume', { volume, muted }),
+  audioStartTap: () => invoke<NativePlaybackSnapshot>('audio_start_tap'),
+  audioStopTap: () => invoke<NativePlaybackSnapshot>('audio_stop_tap'),
+  audioFlushTap: () => invoke<void>('audio_flush_tap'),
+  onAudioDevicesChanged: (listener: () => void) =>
+    listen<Record<string, unknown>>('audio://devices-changed', () => listener()),
   onNativeTrackEnded: (listener: (trackId: string) => void) =>
     listen<{ trackId: string }>('audio://track-ended', (ev) => listener(ev.payload.trackId)),
 };

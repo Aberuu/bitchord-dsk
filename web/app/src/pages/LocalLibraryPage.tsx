@@ -119,36 +119,10 @@ export default function LocalLibraryPage() {
   const folders = foldersQuery.data ?? [];
   const tracks = tracksQuery.data ?? [];
 
-  const playFromLocal = async (startIndex: number) => {
+  const playFromLocal = (startIndex: number) => {
     const selected = tracks[startIndex];
     if (!selected) return;
-    const snap = await desktopApi.audioSnapshot().catch(() => null);
-    if (snap?.settings.outputMode === 'wasapi_exclusive') {
-      const played = await desktopApi.audioPlayFile(selected.id, selected.filePath);
-      usePlayer.setState({
-        bitPerfectStatus: played.bitPerfect,
-        nowPlaying: {
-          videoId: selected.id,
-          title: selected.title,
-          artist: selected.artist,
-          artworkUrl: null,
-          durationSec: played.durationSec || selected.durationSec,
-          streamInfo: `${selected.codec} · ${played.bitPerfect.driver ?? 'WASAPI Exclusive'}`,
-          stream: {
-            codec: selected.codec,
-            itag: null,
-            bitrateKbps: null,
-            sampleRateHz: played.sampleRateHz,
-            channels: played.channels,
-            mode: 'direct',
-            client: played.bitPerfect.exact ? 'WASAPI Bit-Exact' : 'WASAPI Exclusive',
-          },
-        },
-        status: 'playing',
-        error: null,
-      });
-      return;
-    }
+    usePlayer.getState().registerLocalTracks(tracks);
     const queueTracks = tracks.map(toQueueTrack);
     usePlayer.getState().playTracks(queueTracks, startIndex, { title: 'Local Music', type: 'playlist' });
   };

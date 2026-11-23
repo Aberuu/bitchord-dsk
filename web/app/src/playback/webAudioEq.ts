@@ -165,6 +165,7 @@ export function formatBalanceLabel(balance: number): string {
 
 export class WebAudioEqualizer {
   readonly input: GainNode;
+  readonly output: GainNode;
   private readonly preamp: GainNode;
   private readonly filters: BiquadFilterNode[];
   private readonly panner: StereoPannerNode;
@@ -176,8 +177,9 @@ export class WebAudioEqualizer {
   private readonly rr: GainNode;
   private readonly limiter: DynamicsCompressorNode;
 
-  constructor(ctx: AudioContext) {
+  constructor(ctx: AudioContext, destination: AudioNode | null = ctx.destination) {
     this.input = new GainNode(ctx, { gain: 1 });
+    this.output = new GainNode(ctx, { gain: 1 });
     this.preamp = new GainNode(ctx, { gain: 1 });
     this.filters = EQ_SLOTS.map(
       (slot) =>
@@ -225,7 +227,10 @@ export class WebAudioEqualizer {
 
     this.merger.connect(this.panner);
     this.panner.connect(this.limiter);
-    this.limiter.connect(ctx.destination);
+    this.limiter.connect(this.output);
+    if (destination) {
+      this.output.connect(destination);
+    }
   }
 
   applyConfig(cfg: EqConfig): void {

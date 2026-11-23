@@ -83,6 +83,7 @@ export function buildAudioPipelineData(input: PipelineInput): AudioPipelineSumma
 
   const isLocal = nowPlaying?.videoId.startsWith('local:') ?? false;
   const nativeActive = nativeSnapshot?.active === true;
+  const tapActive = nativeSnapshot?.tapActive === true;
   const stream = nowPlaying?.stream ?? null;
 
   const sourceName = !nowPlaying
@@ -137,11 +138,20 @@ export function buildAudioPipelineData(input: PipelineInput): AudioPipelineSumma
   const decoderFormat =
     outputPrecision === 'float32' ? '32-bit float PCM' : '16-bit PCM';
 
-  const outRateHz = bitPerfect?.active
+  const selectedDeviceId = nativeSnapshot?.settings.deviceId ?? null;
+  const matchedDevice =
+    (selectedDeviceId ? devices.find((d) => d.id === selectedDeviceId) : null) ??
+    devices.find((d) => d.isDefault) ??
+    devices[0] ??
+    null;
+
+  const outRateHz = bitPerfect?.sampleRateHz
     ? bitPerfect.sampleRateHz
     : nativeActive
       ? nativeSnapshot.sampleRateHz
-      : webAudioSampleRateHz ?? sourceRateHz ?? 48000;
+      : tapActive && matchedDevice
+        ? matchedDevice.maxSampleRateHz
+        : webAudioSampleRateHz ?? sourceRateHz ?? 48000;
 
   const isPassthrough =
     sourceRateHz !== null && outRateHz !== null && sourceRateHz === outRateHz;
@@ -157,7 +167,9 @@ export function buildAudioPipelineData(input: PipelineInput): AudioPipelineSumma
       ? 'None'
       : nativeActive
         ? 'Rubato Sinc Resampler'
-        : 'Web Audio Resampler';
+        : tapActive
+          ? 'Desktop Tap Resampler'
+          : 'Web Audio Resampler';
 
   const resamplerQuality = !sourceRateHz
     ? NONE
@@ -180,15 +192,17 @@ export function buildAudioPipelineData(input: PipelineInput): AudioPipelineSumma
       : '-0.7 dB';
 
   const selectedMode = nativeSnapshot?.settings.outputMode ?? 'shared';
-  const outputApi = bitPerfect?.active
-    ? bitPerfect.driver ?? 'WASAPI Exclusive'
-    : desktop
-      ? selectedMode === 'wasapi_exclusive'
-        ? 'WASAPI Exclusive'
-        : selectedMode === 'asio'
-          ? 'ASIO'
-          : 'WASAPI Shared'
-      : 'Web Audio API';
+  const outputApi = bitPerfect?.driver
+    ? bitPerfect.driver
+    : !desktop
+      ? 'Web Audio API'
+      : nativeActive || tapActive
+        ? selectedMode === 'wasapi_exclusive'
+          ? 'WASAPI Exclusive'
+          : selectedMode === 'asio'
+            ? 'ASIO'
+            : 'WASAPI Shared'
+        : 'WASAPI Shared (System Default)';
 
   const bitExactVerdict = (() => {
     if (bitPerfect?.active && bitPerfect.exact) {
@@ -207,23 +221,28 @@ export function buildAudioPipelineData(input: PipelineInput): AudioPipelineSumma
     return 'No (system mixer resampled)';
   })();
 
-  const selectedDeviceId = nativeSnapshot?.settings.deviceId ?? null;
-  const matchedDevice =
-    (selectedDeviceId ? devices.find((d) => d.id === selectedDeviceId) : null) ??
-    devices.find((d) => d.isDefault) ??
-    devices[0] ??
-    null;
-
   const activeDeviceName =
     bitPerfect?.deviceName ??
     matchedDevice?.name ??
     (desktop ? 'Windows Default Speakers' : 'System Default Output');
 
+  const routeText = !desktop
+    ? 'BROWSER'
+    : nativeActive
+      ? 'DESKTOP (Native Lossless)'
+      : tapActive
+        ? 'DESKTOP (Audio Tap)'
+        : 'DESKTOP (System Default)';
+
   const directText = bitPerfect?.active
     ? `Active (${bitPerfect.driver ?? 'WASAPI Exclusive'}, bypasses mixer)`
     : desktop && selectedMode === 'wasapi_exclusive'
-      ? 'Armed (activates on local lossless files)'
-      : 'Shared Mixed Path (Windows Audio Engine)';
+      ? tapActive
+        ? 'Active via WASAPI Exclusive Tap'
+        : 'Armed (activates on local lossless files or custom device)'
+      : tapActive
+        ? `Active Tap (${matchedDevice?.name ?? 'Selected output'})`
+        : 'Shared Mixed Path (Windows Audio Engine)';
 
   const outputFormatText = bitPerfect?.active
     ? `PCM${bitPerfect.outputBits} / ${formatSampleRate(bitPerfect.sampleRateHz)}`
@@ -239,7 +258,7 @@ export function buildAudioPipelineData(input: PipelineInput): AudioPipelineSumma
 
   const outputRows: PipelineMetricRow[] = [
     { label: 'Device Name', value: activeDeviceName },
-    { label: 'Route', value: desktop ? 'DESKTOP' : 'BROWSER' },
+    { label: 'Route', value: routeText },
     { label: 'Transport', value: outputApi },
     { label: 'Direct', value: directText },
     { label: 'Output', value: outputFormatText },

@@ -6,7 +6,7 @@ use core_auth::{SecretVault, SpotifyService, YouTubeAuthService};
 use core_downloads::LibraryStore;
 use core_integrations::{DiscordService, ScrobbleService, SmtcController};
 use core_lyrics::LyricsProxy;
-use core_playback::NativeAudioEngine;
+use core_playback::{AudioHotplugWatcher, AudioTapServer, NativeAudioEngine};
 use core_stats::ListeningStatsStore;
 use core_youtube::LoopbackProxy;
 use parking_lot::Mutex;
@@ -26,6 +26,8 @@ pub struct AppState {
     pub library: Arc<LibraryStore>,
     pub stats: Arc<ListeningStatsStore>,
     pub playback: Arc<NativeAudioEngine>,
+    pub audio_tap_url: String,
+    pub _audio_hotplug: AudioHotplugWatcher,
     pub smtc: Mutex<Option<SmtcController>>,
     pub vibrancy_mode: Mutex<String>,
     pub minimize_to_tray: Mutex<bool>,
@@ -85,6 +87,17 @@ pub fn run() {
                 );
             })));
 
+            let tap_server = tauri::async_runtime::block_on(AudioTapServer::start(playback.tap_buffer()))
+                .expect("start loopback audio tap server");
+            let audio_tap_url = tap_server.ws_url().to_string();
+
+            let playback_hotplug = Arc::clone(&playback);
+            let app_handle_hotplug = app.handle().clone();
+            let audio_hotplug = AudioHotplugWatcher::start(Arc::new(move || {
+                playback_hotplug.handle_devices_changed();
+                let _ = app_handle_hotplug.emit("audio://devices-changed", json!({}));
+            }));
+
             let mut vibrancy = "none".to_string();
             let mut smtc_ctrl: Option<SmtcController> = None;
 
@@ -116,6 +129,8 @@ pub fn run() {
                 library: Arc::clone(&library),
                 stats: Arc::clone(&stats),
                 playback,
+                audio_tap_url,
+                _audio_hotplug: audio_hotplug,
                 smtc: Mutex::new(smtc_ctrl),
                 vibrancy_mode: Mutex::new(vibrancy),
                 minimize_to_tray: Mutex::new(true),
@@ -177,6 +192,9 @@ pub fn run() {
             commands::audio_stop,
             commands::audio_seek,
             commands::audio_set_volume,
+            commands::audio_start_tap,
+            commands::audio_stop_tap,
+            commands::audio_flush_tap,
             commands::stats_record_sample,
             commands::stats_flush,
             commands::stats_get_summary,

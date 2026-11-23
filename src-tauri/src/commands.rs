@@ -63,6 +63,7 @@ impl BridgeCallResult {
 #[serde(rename_all = "camelCase")]
 pub struct DesktopBootstrap {
     pub proxy_base_url: String,
+    pub audio_tap_url: String,
     pub vibrancy_mode: String,
     pub minimize_to_tray: bool,
     pub version: String,
@@ -81,6 +82,7 @@ pub struct UpdateCheckResult {
 pub fn get_desktop_bootstrap(state: State<'_, AppState>) -> DesktopBootstrap {
     DesktopBootstrap {
         proxy_base_url: state.proxy.base_url().to_string(),
+        audio_tap_url: state.audio_tap_url.clone(),
         vibrancy_mode: state.vibrancy_mode.lock().clone(),
         minimize_to_tray: *state.minimize_to_tray.lock(),
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -430,45 +432,58 @@ pub fn local_media_url(id: String, state: State<'_, AppState>) -> Option<String>
     Some(state.proxy.register_local_file(id.replace(':', "-"), path))
 }
 
-#[tauri::command]
-pub fn audio_list_devices(state: State<'_, AppState>) -> Vec<AudioDeviceInfo> {
-    state.playback.devices()
+async fn run_blocking<T, F>(task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|e| format!("Audio background task failed: {e}"))
 }
 
 #[tauri::command]
-pub fn audio_snapshot(state: State<'_, AppState>) -> NativePlaybackSnapshot {
-    state.playback.snapshot()
+pub async fn audio_list_devices(state: State<'_, AppState>) -> Result<Vec<AudioDeviceInfo>, String> {
+    let playback = state.playback.clone();
+    run_blocking(move || playback.devices()).await
 }
 
 #[tauri::command]
-pub fn audio_update_settings(
+pub async fn audio_snapshot(state: State<'_, AppState>) -> Result<NativePlaybackSnapshot, String> {
+    let playback = state.playback.clone();
+    run_blocking(move || playback.snapshot()).await
+}
+
+#[tauri::command]
+pub async fn audio_update_settings(
     settings: AudioSettings,
     state: State<'_, AppState>,
-) -> NativePlaybackSnapshot {
-    state.playback.update_settings(settings)
+) -> Result<NativePlaybackSnapshot, String> {
+    let playback = state.playback.clone();
+    run_blocking(move || playback.update_settings(settings)).await
 }
 
 #[tauri::command]
-pub fn audio_play_file(
+pub async fn audio_play_file(
     track_id: String,
     file_path: String,
     state: State<'_, AppState>,
 ) -> Result<NativePlaybackSnapshot, String> {
-    state
-        .playback
-        .play_local_file(track_id, PathBuf::from(file_path))
+    let playback = state.playback.clone();
+    run_blocking(move || playback.play_local_file(track_id, PathBuf::from(file_path)))
+        .await?
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn audio_queue_gapless_next(
+pub async fn audio_queue_gapless_next(
     track_id: String,
     file_path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state
-        .playback
-        .queue_gapless_next(track_id, PathBuf::from(file_path))
+    let playback = state.playback.clone();
+    run_blocking(move || playback.queue_gapless_next(track_id, PathBuf::from(file_path)))
+        .await?
         .map_err(|e| e.to_string())
 }
 
@@ -483,8 +498,9 @@ pub fn audio_resume(state: State<'_, AppState>) {
 }
 
 #[tauri::command]
-pub fn audio_stop(state: State<'_, AppState>) {
-    state.playback.stop();
+pub async fn audio_stop(state: State<'_, AppState>) -> Result<(), String> {
+    let playback = state.playback.clone();
+    run_blocking(move || playback.stop()).await
 }
 
 #[tauri::command]
@@ -495,6 +511,25 @@ pub fn audio_seek(seconds: f64, state: State<'_, AppState>) {
 #[tauri::command]
 pub fn audio_set_volume(volume: f32, muted: bool, state: State<'_, AppState>) {
     state.playback.set_volume(volume, muted);
+}
+
+#[tauri::command]
+pub async fn audio_start_tap(state: State<'_, AppState>) -> Result<NativePlaybackSnapshot, String> {
+    let playback = state.playback.clone();
+    run_blocking(move || playback.start_tap_mode())
+        .await?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn audio_stop_tap(state: State<'_, AppState>) -> Result<NativePlaybackSnapshot, String> {
+    let playback = state.playback.clone();
+    run_blocking(move || playback.stop_tap_mode()).await
+}
+
+#[tauri::command]
+pub fn audio_flush_tap(state: State<'_, AppState>) {
+    state.playback.flush_tap();
 }
 
 #[tauri::command]

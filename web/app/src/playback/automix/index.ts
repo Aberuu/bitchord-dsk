@@ -1,3 +1,5 @@
+import { isTauriDesktop } from '@/desktop/tauriBridge';
+import { DesktopAudioTap } from '../audioTap';
 import { WebAudioEqualizer } from '../webAudioEq';
 import { AutoDJ, type AutomixHost, type AutoDJSnapshot } from './engine/autodj';
 import { Deck } from './engine/deck';
@@ -18,6 +20,9 @@ export interface AutomixGraph {
   master: GainNode;
   /** 10-slot Web Audio parametric & tone equalizer + limiter on the master bus. */
   eq: WebAudioEqualizer;
+  /** Gates direct Chromium audio output when the desktop Rust audio tap is active. */
+  directGain: GainNode;
+  tap: DesktopAudioTap | null;
   decks: Deck[];
   dj: AutoDJ;
 }
@@ -35,12 +40,15 @@ export function createAutomixGraph(
 ): AutomixGraph {
   const ctx = new AudioContext({ latencyHint: 'playback' });
   void ctx.resume();
-  const eq = new WebAudioEqualizer(ctx);
+  const directGain = new GainNode(ctx, { gain: 1 });
+  directGain.connect(ctx.destination);
+  const eq = new WebAudioEqualizer(ctx, directGain);
+  const tap = isTauriDesktop() ? new DesktopAudioTap(ctx, eq.output, directGain) : null;
   const master = new GainNode(ctx, { gain: 1 });
   master.connect(eq.input);
   const decks = audios.map((audio, n) => new Deck(n === 0 ? 'A' : 'B', ctx, audio, master));
   let loops: Promise<[LoopDeck, LoopDeck]> | null = null;
   const loopDecks = () => (loops ??= Promise.all([LoopDeck.create(ctx, master), LoopDeck.create(ctx, master)]));
   const dj = new AutoDJ({ ctx, loopDecks, ...host(decks) }, onUpdate);
-  return { ctx, master, eq, decks, dj };
+  return { ctx, master, eq, directGain, tap, decks, dj };
 }

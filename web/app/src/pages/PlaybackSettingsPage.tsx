@@ -1,4 +1,3 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   AudioLines,
   ChevronRight,
@@ -16,13 +15,12 @@ import { PrefetchLink } from '@/components/PrefetchLink';
 import { Select } from '@/components/Select';
 import { SubpageHeader } from '@/components/SubpageHeader';
 import {
-  desktopApi,
   isTauriDesktop,
   type AudioSettings,
   type OutputMode,
 } from '@/desktop/tauriBridge';
 import { useAudioPipeline } from '@/desktop/useAudioPipeline';
-import { queryClient } from '@/lib/queryClient';
+import { refreshDesktopAudioState, useDesktopAudioDevices } from '@/desktop/useDesktopAudioDevices';
 import { AUTOMIX_BARS } from '@/playback/automix/choices';
 import {
   usePlayer,
@@ -117,24 +115,9 @@ export default function PlaybackSettingsPage() {
     setSleepTimer,
   } = usePlayer.getState();
 
-  const devicesQuery = useQuery({
-    queryKey: ['desktop', 'audio', 'devices'],
-    queryFn: () => desktopApi.audioListDevices(),
+  const { devicesQuery, snapQuery, updateAudio: saveNative, refresh } = useDesktopAudioDevices({
     enabled: desktop,
-  });
-
-  const snapQuery = useQuery({
-    queryKey: ['desktop', 'audio', 'snapshot'],
-    queryFn: () => desktopApi.audioSnapshot(),
-    enabled: desktop,
-  });
-
-  const saveNative = useMutation({
-    mutationFn: (next: AudioSettings) => desktopApi.audioUpdateSettings(next),
-    onSuccess: (updated) => {
-      queryClient.setQueryData(['desktop', 'audio', 'snapshot'], updated);
-      usePlayer.setState({ bitPerfectStatus: updated.bitPerfect });
-    },
+    live: true,
   });
 
   const snap = snapQuery.data;
@@ -208,7 +191,12 @@ export default function PlaybackSettingsPage() {
               label="Prefer USB DAC"
               detail="Automatically prioritize connected external USB DACs when available."
               checked={preferUsbDac}
-              onChange={setPreferUsbDac}
+              onChange={(checked) => {
+                setPreferUsbDac(checked);
+                if (checked) {
+                  void refreshDesktopAudioState(true);
+                }
+              }}
             />
           </div>
 
@@ -224,10 +212,12 @@ export default function PlaybackSettingsPage() {
                     <span>Bit-perfect output</span>
                     <span className={settingsUi.rowDetail}>
                       {snap.bitPerfect.active
-                        ? snap.bitPerfect.exact
-                          ? `Bit-exact via ${snap.bitPerfect.driver} (${snap.bitPerfect.sampleRateHz / 1000} kHz / ${snap.bitPerfect.outputBits}-bit)`
-                          : `DAC ceiling converted with TPDF dither (${snap.bitPerfect.sampleRateHz / 1000} kHz)`
-                        : 'WASAPI Exclusive bypasses the Windows mixer for local lossless files'}
+                        ? snap.tapActive
+                          ? `Active via ${snap.bitPerfect.driver} (${snap.bitPerfect.sampleRateHz / 1000} kHz / ${snap.bitPerfect.outputBits}-bit)`
+                          : snap.bitPerfect.exact
+                            ? `Bit-exact via ${snap.bitPerfect.driver} (${snap.bitPerfect.sampleRateHz / 1000} kHz / ${snap.bitPerfect.outputBits}-bit)`
+                            : `DAC ceiling converted with TPDF dither (${snap.bitPerfect.sampleRateHz / 1000} kHz)`
+                        : 'WASAPI Exclusive bypasses the Windows mixer when supported'}
                     </span>
                   </span>
                 </span>
@@ -267,7 +257,7 @@ export default function PlaybackSettingsPage() {
                     type="button"
                     className="grid size-8 place-items-center rounded-full bg-quaternary text-secondary hover:text-primary"
                     aria-label="Refresh audio devices"
-                    onClick={() => void devicesQuery.refetch()}
+                    onClick={() => void refresh()}
                   >
                     <RefreshCw size={13} aria-hidden="true" />
                   </button>

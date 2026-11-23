@@ -1,9 +1,17 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useEffect, useRef } from 'react';
 import { artworkAtPixels } from '@/lib/artwork';
-import { getPlayhead, onTrackEnded, usePlayer } from '@/state/player';
+import {
+  getPlayhead,
+  handleNativeTrackEnded,
+  onTrackEnded,
+  syncNativePlayheadFromSnapshot,
+  usePlayer,
+} from '@/state/player';
 import { useUi } from '@/state/ui';
+import { queryClient } from '@/lib/queryClient';
 import { desktopApi, initDesktopBootstrap, isTauriDesktop } from './tauriBridge';
+import { bindDesktopAudioHotplug, DESKTOP_AUDIO_SNAPSHOT_KEY } from './useDesktopAudioDevices';
 import { useListeningRecorder } from './useListeningRecorder';
 
 export function useDesktopIntegrations(): void {
@@ -11,6 +19,7 @@ export function useDesktopIntegrations(): void {
   const theme = useUi((s) => s.theme);
   const nowPlaying = usePlayer((s) => s.nowPlaying);
   const status = usePlayer((s) => s.status);
+  const nativeActive = usePlayer((s) => s.nativeActive);
   const queue = usePlayer((s) => s.queue);
   const index = usePlayer((s) => s.index);
 
@@ -39,7 +48,9 @@ export function useDesktopIntegrations(): void {
   useEffect(() => {
     if (!isTauriDesktop()) return;
     void initDesktopBootstrap();
-    let unlisten: (() => void) | undefined;
+    const unbindHotplug = bindDesktopAudioHotplug();
+    let unlistenMedia: (() => void) | undefined;
+    let unlistenNativeEnd: (() => void) | undefined;
     let active = true;
     void desktopApi
       .onMediaAction((ev) => {
@@ -67,14 +78,38 @@ export function useDesktopIntegrations(): void {
         }
       })
       .then((fn) => {
-        if (active) unlisten = fn;
+        if (active) unlistenMedia = fn;
+        else fn();
+      });
+    void desktopApi
+      .onNativeTrackEnded((trackId) => {
+        if (active) handleNativeTrackEnded(trackId);
+      })
+      .then((fn) => {
+        if (active) unlistenNativeEnd = fn;
         else fn();
       });
     return () => {
       active = false;
-      unlisten?.();
+      unbindHotplug();
+      unlistenMedia?.();
+      unlistenNativeEnd?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isTauriDesktop() || !nativeActive) return;
+    const id = window.setInterval(() => {
+      void desktopApi
+        .audioSnapshot()
+        .then((snap) => {
+          queryClient.setQueryData(DESKTOP_AUDIO_SNAPSHOT_KEY, snap);
+          syncNativePlayheadFromSnapshot(snap);
+        })
+        .catch(() => {});
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [nativeActive]);
 
   useEffect(() => {
     if (!isTauriDesktop() || !nowPlaying) return;

@@ -11,14 +11,28 @@ asio = ["cpal/asio"]
 [dependencies]
 anyhow.workspace = true
 cpal.workspace = true
+futures-util.workspace = true
 parking_lot.workspace = true
 rand.workspace = true
 serde.workspace = true
 symphonia.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
 tracing.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 wasapi.workspace = true
+windows-core = "0.58"
+windows = { version = "0.58", features = [
+    "implement",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_UI_Shell_PropertiesSystem",
+] }
 
 [build-dependencies]
 cc = "1"

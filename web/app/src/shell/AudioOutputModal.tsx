@@ -1,50 +1,59 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { AudioLines, Check, ChevronRight, Headphones, MonitorSpeaker, Speaker, Volume2, VolumeX, X } from 'lucide-react';
-import { useEffect, useRef } from 'react';
 import {
-  desktopApi,
-  isTauriDesktop,
-  type AudioSettings,
-  type OutputMode,
-} from '@/desktop/tauriBridge';
+  AudioLines,
+  Bluetooth,
+  Check,
+  ChevronRight,
+  Headphones,
+  MonitorSpeaker,
+  RefreshCw,
+  Speaker,
+  Usb,
+  Volume2,
+  VolumeX,
+  X,
+} from 'lucide-react';
+import { useEffect, useRef } from 'react';
+import type { AudioDeviceKind, OutputMode } from '@/desktop/tauriBridge';
 import { useAudioPipeline } from '@/desktop/useAudioPipeline';
-import { queryClient } from '@/lib/queryClient';
+import { useDesktopAudioDevices } from '@/desktop/useDesktopAudioDevices';
 import { usePlayer } from '@/state/player';
 import { useUi } from '@/state/ui';
 
+function OutputDeviceIcon({ kind }: { kind: AudioDeviceKind }) {
+  switch (kind) {
+    case 'headphones':
+      return <Headphones size={18} aria-hidden="true" />;
+    case 'usb_dac':
+      return <Usb size={18} aria-hidden="true" />;
+    case 'bluetooth':
+      return <Bluetooth size={18} aria-hidden="true" />;
+    case 'hdmi':
+      return <MonitorSpeaker size={18} aria-hidden="true" />;
+    default:
+      return <Speaker size={18} aria-hidden="true" />;
+  }
+}
+
 export function AudioOutputModal() {
   const open = useUi((s) => s.audioOutputOpen);
+  if (!open) return null;
+  return <AudioOutputModalContent />;
+}
+
+function AudioOutputModalContent() {
   const setOpen = useUi((s) => s.setAudioOutputOpen);
   const setPipelineOpen = useUi((s) => s.setAudioPipelineOpen);
   const volume = usePlayer((s) => s.volume);
   const muted = usePlayer((s) => s.muted);
   const { setVolume, toggleMute } = usePlayer.getState();
   const pipeline = useAudioPipeline();
-  const desktop = isTauriDesktop();
+  const { desktop, devicesQuery, snapQuery, updateAudio, refresh } = useDesktopAudioDevices({
+    enabled: true,
+    live: true,
+  });
   const closeRef = useRef<HTMLButtonElement>(null);
 
-  const devicesQuery = useQuery({
-    queryKey: ['desktop', 'audio', 'devices'],
-    queryFn: () => desktopApi.audioListDevices(),
-    enabled: desktop && open,
-  });
-
-  const snapQuery = useQuery({
-    queryKey: ['desktop', 'audio', 'snapshot'],
-    queryFn: () => desktopApi.audioSnapshot(),
-    enabled: desktop && open,
-  });
-
-  const updateAudio = useMutation({
-    mutationFn: (next: AudioSettings) => desktopApi.audioUpdateSettings(next),
-    onSuccess: (updated) => {
-      queryClient.setQueryData(['desktop', 'audio', 'snapshot'], updated);
-      usePlayer.setState({ bitPerfectStatus: updated.bitPerfect });
-    },
-  });
-
   useEffect(() => {
-    if (!open) return;
     closeRef.current?.focus({ preventScroll: true });
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key === 'Escape') {
@@ -54,18 +63,18 @@ export function AudioOutputModal() {
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [open, setOpen]);
-
-  if (!open) return null;
+  }, [setOpen]);
 
   const snap = snapQuery.data;
   const settings = snap?.settings;
   const devices = devicesQuery.data ?? [];
+  const defaultDevice = devices.find((d) => d.isDefault) ?? null;
   const activeDeviceId = settings?.deviceId ?? null;
   const activeMode: OutputMode = settings?.outputMode ?? 'shared';
+  const fallbackReason = snap?.bitPerfect.fallbackReason ?? null;
 
   const selectDevice = (deviceId: string | null) => {
-    if (!settings) return;
+    if (!settings || deviceId === activeDeviceId) return;
     updateAudio.mutate({ ...settings, deviceId });
   };
 
@@ -76,6 +85,7 @@ export function AudioOutputModal() {
   };
 
   const level = muted ? 0 : volume;
+  const refreshing = devicesQuery.isFetching || snapQuery.isFetching;
 
   return (
     <div
@@ -96,20 +106,37 @@ export function AudioOutputModal() {
           <h2 id="audio-output-title" className="type-[700_18px/22px] text-white">
             Audio output
           </h2>
-          <button
-            ref={closeRef}
-            type="button"
-            onClick={() => setOpen(false)}
-            aria-label="Close audio output"
-            className="grid size-8 place-items-center rounded-full bg-white/10 text-white/75 transition-colors hover:bg-white/18 hover:text-white"
-          >
-            <X size={16} aria-hidden="true" />
-          </button>
+          <div className="flex items-center gap-1.5">
+            {desktop && (
+              <button
+                type="button"
+                onClick={() => void refresh()}
+                aria-label="Refresh audio devices"
+                title="Refresh audio devices"
+                className="grid size-8 place-items-center rounded-full bg-white/10 text-white/75 transition-colors hover:bg-white/18 hover:text-white"
+              >
+                <RefreshCw
+                  size={14}
+                  className={refreshing ? 'motion-safe:animate-spin' : undefined}
+                  aria-hidden="true"
+                />
+              </button>
+            )}
+            <button
+              ref={closeRef}
+              type="button"
+              onClick={() => setOpen(false)}
+              aria-label="Close audio output"
+              className="grid size-8 place-items-center rounded-full bg-white/10 text-white/75 transition-colors hover:bg-white/18 hover:text-white"
+            >
+              <X size={16} aria-hidden="true" />
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-col gap-2.5">
-          {/* Primary system / Windows devices */}
-          <div className="flex max-h-[220px] flex-col gap-2 overflow-y-auto [scrollbar-width:thin]">
+          {/* Keep 4px inset breathing room so focus-visible outlines never clip at scroll corners. */}
+          <div className="-m-1 flex max-h-[220px] flex-col gap-2 overflow-y-auto p-1 [scrollbar-width:thin]">
             <button
               type="button"
               onClick={() => selectDevice(null)}
@@ -125,10 +152,18 @@ export function AudioOutputModal() {
                   {desktop ? 'This PC (Default Output)' : 'This PC'}
                 </span>
                 <span className="truncate type-callout text-white/60">
-                  {activeDeviceId === null ? 'Playing here' : 'Windows system default'}
+                  {defaultDevice
+                    ? activeDeviceId === null
+                      ? `Playing via ${defaultDevice.name}`
+                      : `Windows default · ${defaultDevice.name}`
+                    : activeDeviceId === null
+                      ? 'Playing here'
+                      : 'Windows system default'}
                 </span>
               </span>
-              {activeDeviceId === null && <Check size={18} strokeWidth={2.4} className="flex-none text-white" aria-hidden="true" />}
+              {activeDeviceId === null && (
+                <Check size={18} strokeWidth={2.4} className="flex-none text-white" aria-hidden="true" />
+              )}
             </button>
 
             {devices.map((dev) => {
@@ -143,19 +178,18 @@ export function AudioOutputModal() {
                   }`}
                 >
                   <span className="grid size-10 flex-none place-items-center rounded-full bg-white/12 text-white">
-                    {dev.supportsExclusive ? (
-                      <Headphones size={18} aria-hidden="true" />
-                    ) : (
-                      <Speaker size={18} aria-hidden="true" />
-                    )}
+                    <OutputDeviceIcon kind={dev.kind} />
                   </span>
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate type-title-3-emphasized text-white">{dev.name}</span>
                     <span className="truncate type-callout text-white/60">
+                      {dev.isUsbDac ? 'USB DAC · ' : ''}
                       {dev.backend} · up to {Math.round(dev.maxSampleRateHz / 1000)} kHz
                     </span>
                   </span>
-                  {selected && <Check size={18} strokeWidth={2.4} className="flex-none text-white" aria-hidden="true" />}
+                  {selected && (
+                    <Check size={18} strokeWidth={2.4} className="flex-none text-white" aria-hidden="true" />
+                  )}
                 </button>
               );
             })}
@@ -169,10 +203,12 @@ export function AudioOutputModal() {
             >
               <span className="flex min-w-0 flex-col">
                 <span className="type-body-emphasized text-white">WASAPI Exclusive (Bit-Perfect)</span>
-                <span className="type-callout text-white/60">
-                  {activeMode === 'wasapi_exclusive'
-                    ? 'Active for local lossless tracks'
-                    : 'Bypass Windows mixer on compatible DACs'}
+                <span className="truncate type-callout text-white/60">
+                  {fallbackReason
+                    ? fallbackReason
+                    : activeMode === 'wasapi_exclusive'
+                      ? 'Bypassing Windows mixer on active device'
+                      : 'Bypass Windows mixer on compatible DACs'}
                 </span>
               </span>
               <span
@@ -187,7 +223,6 @@ export function AudioOutputModal() {
             </button>
           )}
 
-          {/* Horizontal volume slider card matching mobile Audio Output sheet */}
           <div className="flex items-center gap-3 rounded-[16px] bg-white/7 px-3.5 py-3.5">
             <button
               type="button"
@@ -212,7 +247,6 @@ export function AudioOutputModal() {
             </span>
           </div>
 
-          {/* Audio Pipeline inspector entry matching Screenshot 8 */}
           <button
             type="button"
             onClick={() => {

@@ -1,7 +1,13 @@
 import type { DetectedExtension } from '@bitchord/shared/bridge';
 import { create } from 'zustand';
 import type { Track } from '@/data/music/types';
-import { desktopApi, isTauriDesktop, type BitPerfectStatus } from '@/desktop/tauriBridge';
+import {
+  desktopApi,
+  isTauriDesktop,
+  type AudioSettings,
+  type BitPerfectStatus,
+  type NativePlaybackSnapshot,
+} from '@/desktop/tauriBridge';
 import { extensionQueryKey } from '@/extension/useExtension';
 import { artworkAtPixels } from '@/lib/artwork';
 import { queryClient } from '@/lib/queryClient';
@@ -80,6 +86,14 @@ interface Settings {
   streamingQuality: StreamingQuality;
 }
 
+export interface NativePlayheadState {
+  positionSec: number;
+  durationSec: number;
+  playbackRate: number;
+  updatedAtMs: number;
+  paused: boolean;
+}
+
 interface PlayerState extends Settings {
   /** The whole timeline: what played, what plays, what's next (playback/queue/timeline.ts). */
   queue: QueueEntry[];
@@ -97,6 +111,9 @@ interface PlayerState extends Settings {
   sleepTimerEndMs: number | null;
   sleepAfterTrack: boolean;
   bitPerfectStatus: BitPerfectStatus | null;
+  nativeActive: boolean;
+  nativePlayhead: NativePlayheadState | null;
+  registerLocalTracks: (tracks: { id: string; filePath: string; codec?: string }[]) => void;
 
   /** Plays [tracks] as the context (an album, a playlist), from [startIndex]. */
   playTracks: (tracks: Track[], startIndex: number, source: QueueSource) => void;
@@ -252,8 +269,18 @@ export function getAudio(): HTMLAudioElement | null {
  * underneath). The lyrics and the seek bars read this.
  */
 export function getPlayhead(): { sec: number; paused: boolean } | null {
+  const { mixing, nowPlaying, nativeActive, nativePlayhead } = usePlayer.getState();
+  if (nativeActive && nativePlayhead) {
+    const elapsed = nativePlayhead.paused
+      ? 0
+      : ((performance.now() - nativePlayhead.updatedAtMs) / 1000) * nativePlayhead.playbackRate;
+    const sec = Math.max(
+      0,
+      Math.min(nativePlayhead.durationSec || Number.MAX_SAFE_INTEGER, nativePlayhead.positionSec + elapsed),
+    );
+    return { sec, paused: nativePlayhead.paused };
+  }
   const audio = getAudio();
-  const { mixing, nowPlaying } = usePlayer.getState();
   if (mixing && graph && nowPlaying) {
     const sec = graph.dj.mixPlayhead(nowPlaying.videoId);
     if (sec !== null) return { sec, paused: false };
@@ -263,6 +290,72 @@ export function getPlayhead(): { sec: number; paused: boolean } | null {
 
 export function getAudioContextSampleRate(): number | null {
   return graph?.ctx.sampleRate ?? null;
+}
+
+const localTrackMeta = new Map<string, { filePath: string; codec?: string }>();
+
+function getCachedAudioSettings(): AudioSettings | null {
+  return queryClient.getQueryData<NativePlaybackSnapshot>(['desktop', 'audio', 'snapshot'])?.settings ?? null;
+}
+
+async function resolveDesktopAudioSettings(): Promise<AudioSettings | null> {
+  if (!isTauriDesktop()) return null;
+  const cached = getCachedAudioSettings();
+  if (cached) return cached;
+  const snap = await desktopApi.audioSnapshot().catch(() => null);
+  if (snap) {
+    queryClient.setQueryData(['desktop', 'audio', 'snapshot'], snap);
+    usePlayer.setState({ bitPerfectStatus: snap.bitPerfect });
+  }
+  return snap?.settings ?? null;
+}
+
+function desktopTapWanted(settings: AudioSettings | null = getCachedAudioSettings()): boolean {
+  if (!isTauriDesktop() || !settings) return false;
+  return settings.deviceId !== null || settings.outputMode !== 'shared';
+}
+
+export async function syncDesktopOutputRoute(explicitSettings?: AudioSettings): Promise<void> {
+  if (!isTauriDesktop()) return;
+  const settings = explicitSettings ?? (await resolveDesktopAudioSettings());
+  if (usePlayer.getState().nativeActive) return;
+
+  const wantTap = desktopTapWanted(settings);
+  if (!wantTap) {
+    if (graph?.tap?.isEnabled) {
+      await graph.tap.setRouting(false);
+    }
+    return;
+  }
+
+  if (!decks) return;
+  const g = await ensureAutomix();
+  if (!g) return;
+  void g.ctx.resume();
+  applyCurrentDsp(g);
+  await g.tap?.setRouting(true);
+}
+
+export function handleNativeTrackEnded(trackId: string): void {
+  const state = usePlayer.getState();
+  if (!state.nativeActive || state.nowPlaying?.videoId !== trackId) return;
+  endedListeners.forEach((listener) => listener());
+  void advance(true).then(intent);
+}
+
+export function syncNativePlayheadFromSnapshot(snap: NativePlaybackSnapshot): void {
+  const state = usePlayer.getState();
+  if (!state.nativeActive || !snap.active) return;
+  usePlayer.setState({
+    bitPerfectStatus: snap.bitPerfect,
+    nativePlayhead: {
+      positionSec: snap.positionSec,
+      durationSec: snap.durationSec,
+      playbackRate: snap.playbackRate,
+      updatedAtMs: performance.now(),
+      paused: snap.status !== 'playing',
+    },
+  });
 }
 
 function applyCurrentDsp(g: AutomixGraph | null) {
@@ -278,7 +371,7 @@ function applyCurrentDsp(g: AutomixGraph | null) {
 
 function needsWebAudioGraph(): boolean {
   const s = usePlayer.getState();
-  return s.automix || s.eq.enabled || s.spatialAudio || Math.abs(s.balance) > 0.01;
+  return s.automix || s.eq.enabled || s.spatialAudio || Math.abs(s.balance) > 0.01 || desktopTapWanted();
 }
 export function getMixBeat(): { phase: number | null } | null {
   return graph?.dj.mixBeat() ?? null;
@@ -474,6 +567,11 @@ function syncAutomix() {
     if (!g) return;
     void g.ctx.resume();
     applyCurrentDsp(g);
+    if (desktopTapWanted() && !state.nativeActive) {
+      void g.tap?.setRouting(true);
+    } else if (g.tap?.isEnabled) {
+      void g.tap.setRouting(false);
+    }
     if (state.automix) {
       g.dj.transitionBars = state.automixBars;
       g.dj.start();
@@ -546,6 +644,14 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
   sleepTimerEndMs: null,
   sleepAfterTrack: false,
   bitPerfectStatus: null,
+  nativeActive: false,
+  nativePlayhead: null,
+
+  registerLocalTracks(tracks) {
+    for (const t of tracks) {
+      localTrackMeta.set(t.id, { filePath: t.filePath, codec: t.codec });
+    }
+  },
 
   playTracks(tracks, startIndex, source) {
     if (!tracks.length) return;
@@ -637,8 +743,8 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
 
   previous() {
     const { index, queue, repeat } = get();
-    const audio = getAudio();
-    if (audio && audio.currentTime > BACK_RESTARTS_AFTER_SEC) return get().seek(0);
+    const head = getPlayhead();
+    if (head && head.sec > BACK_RESTARTS_AFTER_SEC) return get().seek(0);
     if (index > 0) void startAt(index - 1);
     else if (repeat === 'all' && queue.length > 1) void startAt(queue.length - 1);
     else return get().seek(0);
@@ -646,11 +752,45 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
   },
 
   togglePlay() {
+    const { nowPlaying, status, index, nativeActive, nativePlayhead } = get();
+    if (!nowPlaying) return;
+
+    if (nativeActive) {
+      const head = getPlayhead();
+      const currentSec = head?.sec ?? nativePlayhead?.positionSec ?? 0;
+      const durSec = nativePlayhead?.durationSec ?? nowPlaying.durationSec;
+      if (status === 'playing') {
+        void desktopApi.audioPause().catch(() => {});
+        set({
+          status: 'paused',
+          nativePlayhead: {
+            positionSec: currentSec,
+            durationSec: durSec,
+            playbackRate: get().playbackRate,
+            updatedAtMs: performance.now(),
+            paused: true,
+          },
+        });
+      } else {
+        void desktopApi.audioResume().catch(() => {});
+        set({
+          status: 'playing',
+          nativePlayhead: {
+            positionSec: currentSec,
+            durationSec: durSec,
+            playbackRate: get().playbackRate,
+            updatedAtMs: performance.now(),
+            paused: false,
+          },
+        });
+      }
+      intent();
+      return;
+    }
+
     // A loop mix holds both elements paused: settle it onto a playing song first.
     if (graph?.dj.loopMixing) cancelCrossfade();
     const audio = getAudio();
-    const { nowPlaying, status, index } = get();
-    if (!nowPlaying) return;
     const resuming = !audio || audio.paused || status === 'error';
     // A routed graph left suspended (no gesture when it was built) would play silence.
     if (resuming) void graph?.ctx.resume();
@@ -665,15 +805,34 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
     } else {
       cancelCrossfade();
       audio.pause();
+      graph?.tap?.flush();
     }
     intent();
   },
 
   seek(seconds) {
+    const { nativeActive, nativePlayhead, nowPlaying, status } = get();
+    if (nativeActive) {
+      const dur = nativePlayhead?.durationSec ?? nowPlaying?.durationSec ?? seconds;
+      const clamped = Math.max(0, Math.min(seconds, dur || seconds));
+      void desktopApi.audioSeek(clamped).catch(() => {});
+      set({
+        nativePlayhead: {
+          positionSec: clamped,
+          durationSec: dur,
+          playbackRate: get().playbackRate,
+          updatedAtMs: performance.now(),
+          paused: status !== 'playing',
+        },
+      });
+      intent();
+      return;
+    }
     const audio = getAudio();
     if (!audio) return;
     cancelCrossfade();
     audio.currentTime = Math.max(0, Math.min(seconds, audio.duration || seconds));
+    graph?.tap?.flush();
     updatePositionState();
     intent();
   },
@@ -719,15 +878,23 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
   },
 
   setVolume(volume) {
-    set({ volume: Math.min(1, Math.max(0, volume)), muted: false });
+    const nextVol = Math.min(1, Math.max(0, volume));
+    set({ volume: nextVol, muted: false });
     applyVolumes();
     saveSettings(get());
+    if (isTauriDesktop()) {
+      void desktopApi.audioSetVolume(nextVol, false).catch(() => {});
+    }
   },
 
   toggleMute() {
-    set({ muted: !get().muted });
+    const nextMuted = !get().muted;
+    set({ muted: nextMuted });
     applyVolumes();
     saveSettings(get());
+    if (isTauriDesktop()) {
+      void desktopApi.audioSetVolume(get().volume, nextMuted).catch(() => {});
+    }
   },
 
   setCrossfade(crossfadeSec) {
@@ -770,6 +937,10 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
       void desktopApi
         .audioSnapshot()
         .then((snap) => desktopApi.audioUpdateSettings({ ...snap.settings, playbackRate: clamped }))
+        .then((updated) => {
+          queryClient.setQueryData(['desktop', 'audio', 'snapshot'], updated);
+          syncNativePlayheadFromSnapshot(updated);
+        })
         .catch(() => {});
     }
   },
@@ -901,6 +1072,71 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
   usePlayer.setState({ index: at, nowPlaying: hintOf(entry.track), status: 'loading', error: null });
   updateMediaSession(usePlayer.getState().nowPlaying);
   try {
+    const settings = await resolveDesktopAudioSettings();
+
+    if (isTauriDesktop() && entry.track.videoId.startsWith('local:') && settings?.outputMode !== 'shared') {
+      let localMeta = localTrackMeta.get(entry.track.videoId);
+      if (!localMeta) {
+        const scanned = await desktopApi.localListTracks().catch(() => []);
+        usePlayer.getState().registerLocalTracks(scanned);
+        localMeta = localTrackMeta.get(entry.track.videoId);
+      }
+      if (localMeta) {
+        if (decks) {
+          for (const d of decks) {
+            void d.engine.stop().catch(() => {});
+            d.audio.pause();
+          }
+        }
+        if (graph?.tap?.isEnabled) {
+          await graph.tap.setRouting(false);
+        }
+        const curState = usePlayer.getState();
+        await desktopApi.audioSetVolume(curState.volume, curState.muted).catch(() => {});
+        const played = await desktopApi.audioPlayFile(entry.track.videoId, localMeta.filePath);
+        if (token !== loadToken) return;
+        if (startSec > 0) await desktopApi.audioSeek(startSec).catch(() => {});
+        if (!autoplay) await desktopApi.audioPause().catch(() => {});
+        queryClient.setQueryData(['desktop', 'audio', 'snapshot'], played);
+        const dur = played.durationSec || entry.track.durationSec || 0;
+        usePlayer.setState({
+          nativeActive: true,
+          nativePlayhead: {
+            positionSec: startSec,
+            durationSec: dur,
+            playbackRate: played.playbackRate,
+            updatedAtMs: performance.now(),
+            paused: !autoplay,
+          },
+          bitPerfectStatus: played.bitPerfect,
+          nowPlaying: {
+            ...hintOf(entry.track),
+            durationSec: dur,
+            streamInfo: `${localMeta.codec ?? played.codec ?? 'PCM'} · ${played.bitPerfect.driver ?? 'WASAPI Exclusive'}`,
+            stream: {
+              codec: localMeta.codec ?? played.codec ?? 'PCM',
+              itag: null,
+              bitrateKbps: null,
+              sampleRateHz: played.sampleRateHz,
+              channels: played.channels,
+              mode: 'direct',
+              client: played.bitPerfect.exact ? 'WASAPI Bit-Exact' : (played.bitPerfect.driver ?? 'WASAPI Exclusive'),
+            },
+          },
+          status: autoplay ? 'playing' : 'paused',
+          error: null,
+        });
+        updateMediaSession(usePlayer.getState().nowPlaying);
+        afterTrackStarted();
+        return;
+      }
+    }
+
+    if (usePlayer.getState().nativeActive) {
+      await desktopApi.audioStop().catch(() => {});
+      usePlayer.setState({ nativeActive: false, nativePlayhead: null });
+    }
+
     const all = await getDecks();
     const deck = all[active]!;
     all[1 - active]!.engine.stop().catch(() => {});
@@ -909,6 +1145,12 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
     const rate = usePlayer.getState().playbackRate;
     deck.audio.playbackRate = rate;
     deck.audio.preservesPitch = true;
+
+    graph?.tap?.flush();
+    if (desktopTapWanted(settings)) {
+      await syncDesktopOutputRoute(settings ?? undefined);
+      if (token !== loadToken) return;
+    }
 
     let localMediaUrl: string | null = null;
     if (isTauriDesktop()) {
@@ -995,9 +1237,14 @@ async function advance(auto: boolean): Promise<void> {
     return;
   }
   if (plan.kind === 'repeat-one') {
+    if (usePlayer.getState().nativeActive) {
+      usePlayer.getState().seek(0);
+      return;
+    }
     const audio = getAudio();
     if (audio) {
       audio.currentTime = 0;
+      graph?.tap?.flush();
       void audio.play();
     }
     return;

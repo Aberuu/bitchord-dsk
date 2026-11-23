@@ -69,4 +69,97 @@ describe('audioPipelineData', () => {
     expect(dspStage.rows.find((r) => r.label === 'Stereo Expand')?.value).toBe('250%');
     expect(dspStage.rows.find((r) => r.label === 'Bit-exact')?.value).toBe('No (equalizer active)');
   });
+
+  it('reports Audio Tap route and selected IEM/Headphones sample rate honestly for streaming tracks', () => {
+    const summary = buildAudioPipelineData({
+      nowPlaying: {
+        videoId: 'yt123',
+        streamInfo: '251 opus',
+        stream: { codec: 'Opus', sampleRateHz: 48000, bitrateKbps: 140, channels: 2 },
+      },
+      eq: DEFAULT_EQ_CONFIG,
+      balance: 0,
+      spatialAudio: false,
+      loudnessNormalization: false,
+      outputPrecision: 'float32',
+      bitPerfect: {
+        active: false,
+        driver: 'WASAPI Shared Tap',
+        deviceName: 'Headphones (Realtek(R) Audio)',
+        sampleRateHz: 96000,
+        outputBits: 32,
+        sourceBits: 32,
+        sourceRateHz: 48000,
+        exact: false,
+        dacLimited: false,
+        fallbackReason: null,
+      },
+      nativeSnapshot: {
+        active: false,
+        tapActive: true,
+        status: 'playing',
+        trackId: null,
+        positionSec: 0,
+        durationSec: 0,
+        volume: 1,
+        playbackRate: 1,
+        codec: 'PCM Tap',
+        sampleRateHz: 48000,
+        bitDepth: 32,
+        channels: 2,
+        bitPerfect: {
+          active: false,
+          driver: 'WASAPI Shared Tap',
+          deviceName: 'Headphones (Realtek(R) Audio)',
+          sampleRateHz: 96000,
+          outputBits: 32,
+          sourceBits: 32,
+          sourceRateHz: 48000,
+          exact: false,
+          dacLimited: false,
+          fallbackReason: null,
+        },
+        asioAvailable: false,
+        eqCurvePoints: [],
+        settings: {
+          outputMode: 'shared',
+          deviceId: 'wasapi_id:hp-1',
+          playbackRate: 1,
+          sleepTimerEndEpochMs: null,
+          sleepAfterTrack: false,
+          eq: DEFAULT_EQ_CONFIG,
+        },
+      },
+      devices: [
+        {
+          id: 'wasapi_id:spk-1',
+          name: 'Speakers (Realtek(R) Audio)',
+          isDefault: true,
+          backend: 'WASAPI',
+          supportsExclusive: true,
+          maxSampleRateHz: 48000,
+          kind: 'speakers',
+          isUsbDac: false,
+        },
+        {
+          id: 'wasapi_id:hp-1',
+          name: 'Headphones (Realtek(R) Audio)',
+          isDefault: false,
+          backend: 'WASAPI',
+          supportsExclusive: true,
+          maxSampleRateHz: 96000,
+          kind: 'headphones',
+          isUsbDac: false,
+        },
+      ],
+      webAudioSampleRateHz: 48000,
+      desktop: true,
+    });
+
+    expect(summary.activeDeviceName).toBe('Headphones (Realtek(R) Audio)');
+    const outputStage = summary.stages[4]!;
+    expect(outputStage.rows.find((r) => r.label === 'Route')?.value).toBe('DESKTOP (Audio Tap)');
+    expect(outputStage.rows.find((r) => r.label === 'Transport')?.value).toBe('WASAPI Shared Tap');
+    expect(summary.stages[2]!.rows.find((r) => r.label === 'Type')?.value).toBe('Desktop Tap Resampler');
+  });
 });

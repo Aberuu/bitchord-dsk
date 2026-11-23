@@ -6,13 +6,14 @@ use crate::sink::{
     asio_available, find_cpal_device, list_output_devices, probe_wasapi_exclusive_format,
     AudioDeviceInfo, BitPerfectStatus, OutputMode,
 };
+use crate::tap::AudioTapBuffer;
 use anyhow::{anyhow, Result};
 use cpal::traits::{DeviceTrait, StreamTrait};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -44,6 +45,7 @@ impl Default for AudioSettings {
 #[serde(rename_all = "camelCase")]
 pub struct NativePlaybackSnapshot {
     pub active: bool,
+    pub tap_active: bool,
     pub status: String,
     pub track_id: Option<String>,
     pub position_sec: f64,
@@ -73,15 +75,22 @@ struct SharedState {
     volume: f32,
     muted: bool,
     track: Option<ActiveTrack>,
+    tap_active: bool,
     bit_perfect: BitPerfectStatus,
     eq_dirty: bool,
     crossfade_sec: f32,
 }
 
+struct WorkerHandle {
+    stop: Arc<AtomicBool>,
+    join: thread::JoinHandle<()>,
+}
+
 pub struct NativeAudioEngine {
     shared: Arc<Mutex<SharedState>>,
-    stop_flag: Arc<AtomicBool>,
-    worker: Mutex<Option<thread::JoinHandle<()>>>,
+    tap: Arc<AudioTapBuffer>,
+    route_lock: Mutex<()>,
+    worker: Mutex<Option<WorkerHandle>>,
     on_ended: Arc<dyn Fn(String) + Send + Sync>,
 }
 
@@ -93,16 +102,22 @@ impl NativeAudioEngine {
             volume: 1.0,
             muted: false,
             track: None,
+            tap_active: false,
             bit_perfect: BitPerfectStatus::default(),
             eq_dirty: true,
             crossfade_sec: 0.0,
         }));
         Self {
             shared,
-            stop_flag: Arc::new(AtomicBool::new(false)),
+            tap: Arc::new(AudioTapBuffer::new()),
+            route_lock: Mutex::new(()),
             worker: Mutex::new(None),
             on_ended,
         }
+    }
+
+    pub fn tap_buffer(&self) -> Arc<AudioTapBuffer> {
+        Arc::clone(&self.tap)
     }
 
     pub fn devices(&self) -> Vec<AudioDeviceInfo> {
@@ -121,11 +136,21 @@ impl NativeAudioEngine {
                 t.audio.bit_depth,
                 t.audio.channels,
             ),
+            None if guard.tap_active => (
+                None,
+                0.0,
+                0.0,
+                Some("PCM Tap".into()),
+                self.tap.input_sample_rate_hz(),
+                32,
+                2,
+            ),
             None => (None, 0.0, 0.0, None, 0, 0, 0),
         };
         let eq_curve = EqCurve::from_config(&guard.settings.eq).response_points();
         NativePlaybackSnapshot {
             active: guard.track.is_some(),
+            tap_active: guard.tap_active,
             status: guard.status.clone(),
             track_id,
             position_sec: pos,
@@ -144,14 +169,89 @@ impl NativeAudioEngine {
     }
 
     pub fn update_settings(&self, settings: AudioSettings) -> NativePlaybackSnapshot {
-        let mut guard = self.shared.lock();
-        guard.settings = AudioSettings {
+        let _route = self.route_lock.lock();
+        let next_settings = AudioSettings {
             playback_rate: settings.playback_rate.clamp(0.5, 2.0),
             ..settings
         };
-        guard.eq_dirty = true;
-        drop(guard);
+
+        let (route_changed, has_local, tap_active, uses_default_shared) = {
+            let mut guard = self.shared.lock();
+            let changed = guard.settings.output_mode != next_settings.output_mode
+                || guard.settings.device_id != next_settings.device_id;
+            guard.settings = next_settings;
+            guard.eq_dirty = true;
+            if changed {
+                guard.bit_perfect.fallback_reason = None;
+            }
+            let default_shared = guard.settings.device_id.is_none()
+                && guard.settings.output_mode == OutputMode::Shared;
+            (
+                changed,
+                guard.track.is_some(),
+                guard.tap_active,
+                default_shared,
+            )
+        };
+
+        if tap_active && uses_default_shared {
+            return self.stop_tap_mode_locked();
+        }
+
+        if route_changed && (has_local || tap_active) {
+            self.stop_worker_locked();
+            if let Err(err) = self.spawn_worker_for_active_source_locked() {
+                tracing::error!("Failed to switch audio output route: {err}");
+                let mut guard = self.shared.lock();
+                guard.status = "error".into();
+                guard.bit_perfect.fallback_reason = Some(err.to_string());
+            }
+        }
+
         self.snapshot()
+    }
+
+    pub fn handle_devices_changed(&self) {
+        // Enumerate active endpoints outside route_lock so UI switch requests are not delayed behind MMDevAPI probing.
+        let active_devices = list_output_devices();
+        let _route = self.route_lock.lock();
+        let current_device_id = self.shared.lock().settings.device_id.clone();
+
+        if let Some(ref wanted_id) = current_device_id {
+            let still_present = active_devices.iter().any(|d| &d.id == wanted_id);
+            if !still_present {
+                let (has_local, tap_active, mode) = {
+                    let mut guard = self.shared.lock();
+                    guard.settings.device_id = None;
+                    guard.bit_perfect.fallback_reason =
+                        Some("Selected output device disconnected; switched to Windows default".into());
+                    (
+                        guard.track.is_some(),
+                        guard.tap_active,
+                        guard.settings.output_mode,
+                    )
+                };
+                if tap_active && mode == OutputMode::Shared {
+                    let _ = self.stop_tap_mode_locked();
+                } else if has_local || tap_active {
+                    self.stop_worker_locked();
+                    let _ = self.spawn_worker_for_active_source_locked();
+                }
+                return;
+            }
+        }
+
+        // Follow OS default endpoint changes when playing via Windows Default Output.
+        if current_device_id.is_none() {
+            let (has_local, tap_active) = {
+                let guard = self.shared.lock();
+                (guard.track.is_some(), guard.tap_active)
+            };
+            if has_local || tap_active {
+                self.stop_worker_locked();
+                let _ = self.spawn_worker_for_active_source_locked();
+            }
+        }
     }
 
     pub fn set_volume(&self, volume: f32, muted: bool) {
@@ -173,7 +273,7 @@ impl NativeAudioEngine {
 
     pub fn resume(&self) {
         let mut guard = self.shared.lock();
-        if guard.track.is_some() {
+        if guard.track.is_some() || guard.tap_active {
             guard.status = "playing".into();
         }
     }
@@ -187,11 +287,59 @@ impl NativeAudioEngine {
     }
 
     pub fn stop(&self) {
-        self.stop_worker();
+        let _route = self.route_lock.lock();
+        self.stop_worker_locked();
+        self.tap.flush();
         let mut guard = self.shared.lock();
         guard.track = None;
+        guard.tap_active = false;
         guard.status = "idle".into();
         guard.bit_perfect = BitPerfectStatus::default();
+    }
+
+    pub fn start_tap_mode(&self) -> Result<NativePlaybackSnapshot> {
+        let _route = self.route_lock.lock();
+        // Drop the shared lock before querying worker liveness or reading snapshot() to avoid reentrant Mutex deadlock.
+        let tap_active = self.shared.lock().tap_active;
+        if tap_active && self.has_live_worker() {
+            return Ok(self.snapshot());
+        }
+
+        self.stop_worker_locked();
+        self.tap.flush();
+        {
+            let mut guard = self.shared.lock();
+            guard.track = None;
+            guard.tap_active = true;
+            guard.status = "playing".into();
+            guard.bit_perfect.fallback_reason = None;
+        }
+        self.spawn_worker_for_active_source_locked()?;
+        Ok(self.snapshot())
+    }
+
+    pub fn stop_tap_mode(&self) -> NativePlaybackSnapshot {
+        let _route = self.route_lock.lock();
+        self.stop_tap_mode_locked()
+    }
+
+    fn stop_tap_mode_locked(&self) -> NativePlaybackSnapshot {
+        let was_tap = self.shared.lock().tap_active;
+        if was_tap {
+            self.stop_worker_locked();
+            self.tap.flush();
+            let mut guard = self.shared.lock();
+            guard.tap_active = false;
+            if guard.track.is_none() {
+                guard.status = "idle".into();
+                guard.bit_perfect = BitPerfectStatus::default();
+            }
+        }
+        self.snapshot()
+    }
+
+    pub fn flush_tap(&self) {
+        self.tap.flush();
     }
 
     pub fn queue_gapless_next(&self, track_id: String, path: PathBuf) -> Result<()> {
@@ -205,10 +353,13 @@ impl NativeAudioEngine {
 
     pub fn play_local_file(&self, track_id: String, path: PathBuf) -> Result<NativePlaybackSnapshot> {
         let decoded = Arc::new(decode_file_to_stereo_f32(&path)?);
-        self.stop_worker();
+        let _route = self.route_lock.lock();
+        self.stop_worker_locked();
+        self.tap.flush();
 
-        let (mode, device_id) = {
+        {
             let mut guard = self.shared.lock();
+            guard.tap_active = false;
             guard.track = Some(ActiveTrack {
                 id: track_id,
                 audio: Arc::clone(&decoded),
@@ -217,37 +368,80 @@ impl NativeAudioEngine {
             });
             guard.status = "playing".into();
             guard.eq_dirty = true;
-            (guard.settings.output_mode, guard.settings.device_id.clone())
+            guard.bit_perfect.fallback_reason = None;
+        }
+
+        self.spawn_worker_for_active_source_locked()?;
+        Ok(self.snapshot())
+    }
+
+    fn has_live_worker(&self) -> bool {
+        self.worker
+            .lock()
+            .as_ref()
+            .is_some_and(|w| !w.join.is_finished())
+    }
+
+    fn spawn_worker_for_active_source_locked(&self) -> Result<()> {
+        let (mode, device_id, tap_source, source_rate_hz, source_bits) = {
+            let guard = self.shared.lock();
+            if guard.tap_active {
+                (
+                    guard.settings.output_mode,
+                    guard.settings.device_id.clone(),
+                    Some(Arc::clone(&self.tap)),
+                    self.tap.input_sample_rate_hz(),
+                    32,
+                )
+            } else if let Some(t) = guard.track.as_ref() {
+                (
+                    guard.settings.output_mode,
+                    guard.settings.device_id.clone(),
+                    None,
+                    t.audio.sample_rate_hz,
+                    t.audio.bit_depth,
+                )
+            } else {
+                return Ok(());
+            }
         };
 
-        self.stop_flag.store(false, Ordering::SeqCst);
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop_flag);
         let shared = Arc::clone(&self.shared);
-        let stop_flag = Arc::clone(&self.stop_flag);
         let on_ended = Arc::clone(&self.on_ended);
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(1);
 
         let handle = thread::Builder::new()
             .name("bitchord-audio-out".into())
             .spawn(move || {
+                let mut ready = Some(ready_tx);
                 if mode == OutputMode::WasapiExclusive {
                     match run_wasapi_exclusive_loop(
                         device_id.as_deref(),
-                        decoded.sample_rate_hz,
-                        decoded.bit_depth,
+                        source_rate_hz,
+                        source_bits,
+                        tap_source.clone(),
                         Arc::clone(&shared),
-                        Arc::clone(&stop_flag),
+                        Arc::clone(&worker_stop),
                         Arc::clone(&on_ended),
+                        &mut ready,
                     ) {
                         Ok(()) => return,
                         Err(err) => {
                             let mut guard = shared.lock();
                             guard.bit_perfect = BitPerfectStatus {
                                 active: false,
-                                driver: Some("WASAPI Shared".into()),
+                                driver: Some(if tap_source.is_some() {
+                                    "WASAPI Shared Tap".into()
+                                } else {
+                                    "WASAPI Shared".into()
+                                }),
                                 device_name: None,
-                                sample_rate_hz: decoded.sample_rate_hz,
+                                sample_rate_hz: source_rate_hz,
                                 output_bits: 32,
-                                source_bits: decoded.bit_depth,
-                                source_rate_hz: decoded.sample_rate_hz,
+                                source_bits,
+                                source_rate_hz,
                                 exact: false,
                                 dac_limited: false,
                                 fallback_reason: Some(err.to_string()),
@@ -257,30 +451,48 @@ impl NativeAudioEngine {
                 }
                 if let Err(err) = run_cpal_shared_loop(
                     device_id.as_deref(),
+                    tap_source,
                     Arc::clone(&shared),
-                    stop_flag,
+                    worker_stop,
                     on_ended,
+                    &mut ready,
                 ) {
                     tracing::error!("Shared audio output failed: {err}");
-                    shared.lock().status = "error".into();
+                    let mut guard = shared.lock();
+                    guard.status = "error".into();
+                    guard.bit_perfect.fallback_reason = Some(err.to_string());
                 }
+                signal_ready(&mut ready);
             })?;
 
-        *self.worker.lock() = Some(handle);
-        Ok(self.snapshot())
+        *self.worker.lock() = Some(WorkerHandle {
+            stop: stop_flag,
+            join: handle,
+        });
+        // Briefly await endpoint format initialization so the returned snapshot matches the new device.
+        let _ = ready_rx.recv_timeout(Duration::from_millis(650));
+        Ok(())
     }
 
-    fn stop_worker(&self) {
-        self.stop_flag.store(true, Ordering::SeqCst);
-        if let Some(handle) = self.worker.lock().take() {
-            let _ = handle.join();
+    fn stop_worker_locked(&self) {
+        let entry = self.worker.lock().take();
+        if let Some(worker) = entry {
+            worker.stop.store(true, Ordering::SeqCst);
+            let _ = worker.join.join();
         }
     }
 }
 
 impl Drop for NativeAudioEngine {
     fn drop(&mut self) {
-        self.stop_worker();
+        let _route = self.route_lock.lock();
+        self.stop_worker_locked();
+    }
+}
+
+fn signal_ready(ready_tx: &mut Option<mpsc::SyncSender<()>>) {
+    if let Some(tx) = ready_tx.take() {
+        let _ = tx.try_send(());
     }
 }
 
@@ -360,7 +572,6 @@ fn render_next_block(
                     out_stereo[i * 2 + 1] = r0 + (r1 - r0) * frac;
                     track.frame_cursor += step;
                 } else if let Some((next_id, next_audio)) = track.next_audio.take() {
-                    // Sample-accurate gapless transition onto the pre-decoded next track.
                     track.id = next_id;
                     track.audio = next_audio;
                     track.frame_cursor = 0.0;
@@ -388,9 +599,11 @@ fn render_next_block(
 
 fn run_cpal_shared_loop(
     device_id: Option<&str>,
+    tap_source: Option<Arc<AudioTapBuffer>>,
     shared: Arc<Mutex<SharedState>>,
     stop_flag: Arc<AtomicBool>,
     on_ended: Arc<dyn Fn(String) + Send + Sync>,
+    ready_tx: &mut Option<mpsc::SyncSender<()>>,
 ) -> Result<()> {
     let (device, device_name) = find_cpal_device(device_id)?;
     let default_cfg = device.default_output_config()?;
@@ -399,14 +612,22 @@ fn run_cpal_shared_loop(
 
     {
         let mut guard = shared.lock();
-        let (src_rate, src_bits) = guard
-            .track
-            .as_ref()
-            .map(|t| (t.audio.sample_rate_hz, t.audio.bit_depth))
-            .unwrap_or((output_rate, 16));
+        let (src_rate, src_bits) = if let Some(ref tap) = tap_source {
+            (tap.input_sample_rate_hz(), 32)
+        } else {
+            guard
+                .track
+                .as_ref()
+                .map(|t| (t.audio.sample_rate_hz, t.audio.bit_depth))
+                .unwrap_or((output_rate, 16))
+        };
         guard.bit_perfect = BitPerfectStatus {
             active: false,
-            driver: Some("WASAPI Shared".into()),
+            driver: Some(if tap_source.is_some() {
+                "WASAPI Shared Tap".into()
+            } else {
+                "WASAPI Shared".into()
+            }),
             device_name: Some(device_name),
             sample_rate_hz: output_rate,
             output_bits: 32,
@@ -422,13 +643,17 @@ fn run_cpal_shared_loop(
     let stretcher = Arc::new(Mutex::new(TimeStretcher::new(output_rate)));
     let shared_cb = Arc::clone(&shared);
     let ended_cb = Arc::clone(&on_ended);
+    let stream_broken = Arc::new(AtomicBool::new(false));
+    let stream_broken_cb = Arc::clone(&stream_broken);
 
     let stream = device.build_output_stream(
         &default_cfg.into(),
         move |data: &mut [f32], _| {
             let frames = data.len() / out_channels.max(1);
             let mut stereo = vec![0.0f32; frames * 2];
-            {
+            if let Some(ref tap) = tap_source {
+                tap.pop_resampled(&mut stereo, output_rate);
+            } else {
                 let mut eq_guard = eq.lock();
                 let mut st_guard = stretcher.lock();
                 render_next_block(
@@ -445,16 +670,26 @@ fn run_cpal_shared_loop(
                 let l = stereo[f * 2];
                 let r = stereo[f * 2 + 1];
                 for ch in 0..out_channels {
-                    data[f * out_channels + ch] = if ch == 0 { l } else if ch == 1 { r } else { 0.0 };
+                    data[f * out_channels + ch] = if ch == 0 {
+                        l
+                    } else if ch == 1 {
+                        r
+                    } else {
+                        0.0
+                    };
                 }
             }
         },
-        |err| tracing::warn!("cpal output stream error: {err}"),
+        move |err| {
+            tracing::warn!("cpal output stream error: {err}");
+            stream_broken_cb.store(true, Ordering::Relaxed);
+        },
         None,
     )?;
 
     stream.play()?;
-    while !stop_flag.load(Ordering::Relaxed) {
+    signal_ready(ready_tx);
+    while !stop_flag.load(Ordering::Relaxed) && !stream_broken.load(Ordering::Relaxed) {
         thread::sleep(Duration::from_millis(25));
     }
     Ok(())
@@ -465,29 +700,21 @@ fn run_wasapi_exclusive_loop(
     device_id: Option<&str>,
     source_rate_hz: u32,
     source_bits: u32,
+    tap_source: Option<Arc<AudioTapBuffer>>,
     shared: Arc<Mutex<SharedState>>,
     stop_flag: Arc<AtomicBool>,
     on_ended: Arc<dyn Fn(String) + Send + Sync>,
+    ready_tx: &mut Option<mpsc::SyncSender<()>>,
 ) -> Result<()> {
+    use crate::sink::{open_wasapi_device, ComMtaGuard};
     use std::collections::VecDeque;
-    use wasapi::{
-        get_default_device, DeviceCollection, Direction, SampleType, ShareMode, WaveFormat,
-    };
+    use wasapi::{Direction, SampleType, ShareMode, WaveFormat};
 
+    let _com = ComMtaGuard::acquire();
     let (out_rate, valid_bits, container_bits, exact, friendly) =
         probe_wasapi_exclusive_format(device_id, source_rate_hz, source_bits, 2)?;
 
-    let _ = wasapi::initialize_mta();
-    let device = if let Some(wanted) = device_id {
-        let wanted_clean = wanted.splitn(3, ':').nth(2).unwrap_or(wanted);
-        DeviceCollection::new(&Direction::Render)
-            .map_err(|e| anyhow!("{e}"))?
-            .get_device_with_name(wanted_clean)
-            .map_err(|e| anyhow!("WASAPI device disconnected: {e}"))?
-    } else {
-        get_default_device(&Direction::Render).map_err(|e| anyhow!("{e}"))?
-    };
-
+    let device = open_wasapi_device(device_id)?;
     let mut client = device.get_iaudioclient().map_err(|e| anyhow!("{e}"))?;
     let wave_fmt = WaveFormat::new(
         container_bits as usize,
@@ -507,17 +734,22 @@ fn run_wasapi_exclusive_loop(
     let render_client = client.get_audiorenderclient().map_err(|e| anyhow!("{e}"))?;
     let buffer_frames = client.get_bufferframecount().map_err(|e| anyhow!("{e}"))? as usize;
 
+    let is_tap = tap_source.is_some();
     {
         let mut guard = shared.lock();
         guard.bit_perfect = BitPerfectStatus {
             active: true,
-            driver: Some("WASAPI Exclusive".into()),
+            driver: Some(if is_tap {
+                "WASAPI Exclusive Tap".into()
+            } else {
+                "WASAPI Exclusive".into()
+            }),
             device_name: Some(friendly),
             sample_rate_hz: out_rate,
             output_bits: valid_bits,
             source_bits,
             source_rate_hz,
-            exact,
+            exact: !is_tap && exact,
             dac_limited: !exact,
             fallback_reason: None,
         };
@@ -538,24 +770,29 @@ fn run_wasapi_exclusive_loop(
     let mut pcm_scratch = Vec::new();
 
     client.start_stream().map_err(|e| anyhow!("{e}"))?;
+    signal_ready(ready_tx);
     let mut last_event = Instant::now();
     while !stop_flag.load(Ordering::Relaxed) {
-        if h_event.wait_for_event(100).is_err() && last_event.elapsed() > Duration::from_secs(2) {
+        if h_event.wait_for_event(100).is_ok() {
+            last_event = Instant::now();
+        } else if last_event.elapsed() > Duration::from_secs(2) {
             break;
         }
-        last_event = Instant::now();
         let needed_bytes = buffer_frames * frame_bytes;
         while pending_bytes.len() < needed_bytes {
-            // Bypass EQ/volume when bit-exact exclusive mode is active to keep PCM untouched.
-            render_next_block(
-                &shared,
-                &mut float_block,
-                source_rate_hz,
-                &mut eq,
-                &mut stretcher,
-                exact,
-                &on_ended,
-            );
+            if let Some(ref tap) = tap_source {
+                tap.pop_resampled(&mut float_block, source_rate_hz);
+            } else {
+                render_next_block(
+                    &shared,
+                    &mut float_block,
+                    source_rate_hz,
+                    &mut eq,
+                    &mut stretcher,
+                    exact,
+                    &on_ended,
+                );
+            }
             pcm_scratch.clear();
             converter.process_f32_to_pcm_bytes(&float_block, &mut pcm_scratch);
             pending_bytes.extend(pcm_scratch.iter().copied());
@@ -580,9 +817,120 @@ fn run_wasapi_exclusive_loop(
     _device_id: Option<&str>,
     _source_rate_hz: u32,
     _source_bits: u32,
+    _tap_source: Option<Arc<AudioTapBuffer>>,
     _shared: Arc<Mutex<SharedState>>,
     _stop_flag: Arc<AtomicBool>,
     _on_ended: Arc<dyn Fn(String) + Send + Sync>,
+    _ready_tx: &mut Option<mpsc::SyncSender<()>>,
 ) -> Result<()> {
     Err(anyhow!("WASAPI Exclusive is Windows-only"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_settings_stops_tap_when_switching_back_to_default_shared() {
+        let engine = NativeAudioEngine::new(Arc::new(|_| {}));
+        {
+            let mut guard = engine.shared.lock();
+            guard.tap_active = true;
+            guard.status = "playing".into();
+            guard.settings.device_id = Some("wasapi_id:test".into());
+        }
+        let next = AudioSettings {
+            output_mode: OutputMode::Shared,
+            device_id: None,
+            ..AudioSettings::default()
+        };
+        let snap = engine.update_settings(next);
+        assert!(!snap.tap_active);
+        assert_eq!(snap.status, "idle");
+        assert!(snap.settings.device_id.is_none());
+    }
+
+    #[test]
+    fn handle_devices_changed_clears_disconnected_selected_device() {
+        let engine = NativeAudioEngine::new(Arc::new(|_| {}));
+        {
+            let mut guard = engine.shared.lock();
+            guard.settings.device_id = Some("wasapi_id:{0.0.0.00000000}.{nonexistent-guid}".into());
+        }
+        engine.handle_devices_changed();
+        let snap = engine.snapshot();
+        assert!(snap.settings.device_id.is_none());
+        assert!(snap.bit_perfect.fallback_reason.is_some());
+    }
+
+    #[test]
+    fn start_tap_mode_after_route_switch_never_deadlocks() {
+        let (done_tx, done_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let devices = list_output_devices();
+            let first = devices.first().map(|d| d.id.clone());
+            let second = devices.get(1).or_else(|| devices.first()).map(|d| d.id.clone());
+
+            let engine = NativeAudioEngine::new(Arc::new(|_| {}));
+            engine.update_settings(AudioSettings {
+                output_mode: OutputMode::Shared,
+                device_id: second,
+                ..AudioSettings::default()
+            });
+            let _ = engine.start_tap_mode();
+
+            // Switching to another endpoint and calling start_tap_mode again previously self-deadlocked.
+            let _ = engine.update_settings(AudioSettings {
+                output_mode: OutputMode::Shared,
+                device_id: first,
+                ..AudioSettings::default()
+            });
+            let snap = engine.start_tap_mode().expect("second start_tap_mode must succeed");
+            assert!(snap.tap_active);
+            let _ = engine.stop_tap_mode();
+            let _ = done_tx.send(());
+        });
+
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("start_tap_mode after route switch timed out (deadlock)");
+    }
+
+    #[test]
+    fn concurrent_route_switches_and_hotplug_never_deadlock() {
+        let (done_tx, done_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let devices = list_output_devices();
+            let a = devices.first().map(|d| d.id.clone());
+            let b = devices.get(1).or_else(|| devices.first()).map(|d| d.id.clone());
+
+            let engine = Arc::new(NativeAudioEngine::new(Arc::new(|_| {})));
+            let _ = engine.start_tap_mode();
+
+            let eng_hotplug = Arc::clone(&engine);
+            let hotplug = thread::spawn(move || {
+                for _ in 0..4 {
+                    eng_hotplug.handle_devices_changed();
+                }
+            });
+
+            for i in 0..6 {
+                let id = if i % 2 == 0 { a.clone() } else { b.clone() };
+                engine.update_settings(AudioSettings {
+                    output_mode: OutputMode::Shared,
+                    device_id: id,
+                    ..AudioSettings::default()
+                });
+                let _ = engine.start_tap_mode();
+            }
+
+            hotplug.join().expect("hotplug worker panicked");
+            let _ = engine.stop_tap_mode();
+            let _ = done_tx.send(());
+        });
+
+        done_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("concurrent route switches and hotplug deadlocked");
+    }
 }
