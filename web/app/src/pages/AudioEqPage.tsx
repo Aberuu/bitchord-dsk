@@ -3,8 +3,10 @@ import { useMemo, useRef, type KeyboardEvent, type PointerEvent } from 'react';
 import { PrefetchLink } from '@/components/PrefetchLink';
 import { Select } from '@/components/Select';
 import { SubpageHeader } from '@/components/SubpageHeader';
+import { BIT_PERFECT_BYPASS_WARNING, bypassedRowClasses } from '@/desktop/BitPerfectBypass';
 import type { EqualizerPresetId } from '@/desktop/tauriBridge';
 import { useAudioPipeline } from '@/desktop/useAudioPipeline';
+import { useBitPerfectUi } from '@/desktop/useBitPerfectUi';
 import {
   BAND_LABELS,
   computeEqCurve,
@@ -160,17 +162,20 @@ function TonePad2D({
   x,
   y,
   enabled,
+  disabled = false,
   onChange,
 }: {
   x: number;
   y: number;
   enabled: boolean;
+  disabled?: boolean;
   onChange: (nextX: number, nextY: number) => void;
 }) {
   const padRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
 
   const updateFromClientPoint = (clientX: number, clientY: number) => {
+    if (disabled) return;
     const rect = padRef.current?.getBoundingClientRect();
     if (!rect || rect.width <= 0 || rect.height <= 0) return;
     const inset = 18;
@@ -182,13 +187,14 @@ function TonePad2D({
   };
 
   const handlePointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (disabled) return;
     dragging.current = true;
     e.currentTarget.setPointerCapture(e.pointerId);
     updateFromClientPoint(e.clientX, e.clientY);
   };
 
   const handlePointerMove = (e: PointerEvent<HTMLDivElement>) => {
-    if (!dragging.current) return;
+    if (!dragging.current || disabled) return;
     updateFromClientPoint(e.clientX, e.clientY);
   };
 
@@ -197,6 +203,7 @@ function TonePad2D({
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (disabled) return;
     if (e.key === 'ArrowLeft') {
       e.preventDefault();
       onChange(Math.max(-TONE_STEPS, x - 1), y);
@@ -229,7 +236,8 @@ function TonePad2D({
       <div
         ref={padRef}
         role="slider"
-        tabIndex={0}
+        tabIndex={disabled ? -1 : 0}
+        aria-disabled={disabled || undefined}
         aria-label="Dynamic 2D Tone Pad. Use arrow keys or drag to adjust warmth and mid contour."
         aria-valuetext={`Warm to Bright ${x}, Mid Contour ${y}`}
         aria-valuemin={-TONE_STEPS}
@@ -240,7 +248,9 @@ function TonePad2D({
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
         onKeyDown={handleKeyDown}
-        className="relative mx-auto aspect-[16/10] w-full max-w-[440px] cursor-pointer touch-none rounded-[14px] bg-page/75 p-[18px] select-none"
+        className={`relative mx-auto aspect-[16/10] w-full max-w-[440px] touch-none rounded-[14px] bg-page/75 p-[18px] select-none ${
+          disabled ? 'cursor-not-allowed' : 'cursor-pointer'
+        }`}
       >
         <div className="relative size-full">
           {/* 11x11 dot grid matching BitChord Mobile TonePad */}
@@ -302,10 +312,12 @@ export default function AudioEqPage() {
   const { setEq, setBalance } = usePlayer.getState();
   const pipeline = useAudioPipeline();
   const setPipelineOpen = useUi((s) => s.setAudioPipelineOpen);
+  const { lockDspFeatures } = useBitPerfectUi();
 
   const curve = useMemo(() => computeEqCurve(eq), [eq]);
 
   const resetFlat = () => {
+    if (lockDspFeatures) return;
     setEq({
       ...DEFAULT_EQ_CONFIG,
       enabled: eq.enabled,
@@ -317,16 +329,41 @@ export default function AudioEqPage() {
     <div className={settingsUi.centered}>
       <SubpageHeader title="Equalizer" backTo="/settings" />
       <div className={settingsUi.body}>
-        <section className={settingsUi.group}>
+        {lockDspFeatures && (
+          <section
+            className={`${settingsUi.group} mb-5 px-4 py-3.5`}
+            role="status"
+            aria-label="Equalizer bypassed"
+          >
+            <div className="flex flex-col gap-1">
+              <span className="type-title-3-emphasized text-primary">
+                Equalizer &amp; Balance bypassed (Bit-Perfect active)
+              </span>
+              <p className="type-callout text-secondary">
+                {BIT_PERFECT_BYPASS_WARNING} Your saved EQ settings stay intact.{' '}
+                <PrefetchLink to="/settings/playback" className={settingsUi.inlineLink}>
+                  Playback settings
+                </PrefetchLink>
+              </p>
+            </div>
+          </section>
+        )}
+
+        <section className={`${settingsUi.group} ${bypassedRowClasses(lockDspFeatures)}`}>
           <Toggle
             label="Equalizer"
             detail={
-              eq.enabled
-                ? `Active · Preamp ${curve.preampDb >= 0 ? `+${curve.preampDb.toFixed(1)}` : curve.preampDb.toFixed(1)} dB`
-                : '10-slot parametric & shelf filter bank with automatic makeup preamp and limiter.'
+              lockDspFeatures
+                ? 'Bypassed while WASAPI Exclusive (Bit-Perfect) is active.'
+                : eq.enabled
+                  ? `Active · Preamp ${curve.preampDb >= 0 ? `+${curve.preampDb.toFixed(1)}` : curve.preampDb.toFixed(1)} dB`
+                  : '10-slot parametric & shelf filter bank with automatic makeup preamp and limiter.'
             }
             checked={eq.enabled}
-            onChange={(enabled) => setEq({ enabled })}
+            disabled={lockDspFeatures}
+            onChange={(enabled) => {
+              if (!lockDspFeatures) setEq({ enabled });
+            }}
           />
         </section>
 
@@ -334,7 +371,8 @@ export default function AudioEqPage() {
         <div
           role="tablist"
           aria-label="Equalizer mode"
-          className="mt-5 grid grid-cols-2 gap-1 rounded-pill bg-segmented p-1"
+          aria-disabled={lockDspFeatures || undefined}
+          className={`mt-5 grid grid-cols-2 gap-1 rounded-pill bg-segmented p-1 ${bypassedRowClasses(lockDspFeatures)}`}
         >
           {(
             [
@@ -349,7 +387,10 @@ export default function AudioEqPage() {
                 type="button"
                 role="tab"
                 aria-selected={active}
-                onClick={() => setEq({ mode: tab.id })}
+                disabled={lockDspFeatures}
+                onClick={() => {
+                  if (!lockDspFeatures) setEq({ mode: tab.id });
+                }}
                 className={`rounded-pill px-3 py-2 text-center type-callout-emphasized transition-colors ${
                   active
                     ? 'bg-segmented-selected text-primary shadow-xs'
@@ -364,7 +405,7 @@ export default function AudioEqPage() {
 
         {/* Always-visible live Frequency Response Curve */}
         <h2 className={settingsUi.sectionHeader}>Frequency Response</h2>
-        <section className={settingsUi.group}>
+        <section className={`${settingsUi.group} ${bypassedRowClasses(lockDspFeatures)}`}>
           <div className="px-4 py-3.5">
             <EqCurveSvg points={curve.points} eq={eq} />
           </div>
@@ -373,17 +414,26 @@ export default function AudioEqPage() {
         {eq.mode === 'tone' ? (
           <>
             <h2 className={settingsUi.sectionHeader}>Tone Pad</h2>
-            <section className={settingsUi.group}>
+            <section
+              className={`${settingsUi.group} ${bypassedRowClasses(lockDspFeatures)}`}
+              aria-disabled={lockDspFeatures || undefined}
+            >
               <TonePad2D
                 x={eq.toneX}
                 y={eq.toneY}
                 enabled={eq.enabled}
-                onChange={(toneX, toneY) => setEq({ enabled: true, mode: 'tone', toneX, toneY })}
+                disabled={lockDspFeatures}
+                onChange={(toneX, toneY) => {
+                  if (!lockDspFeatures) setEq({ enabled: true, mode: 'tone', toneX, toneY });
+                }}
               />
 
               <button
                 type="button"
-                onClick={() => setEq({ toneFocused: false })}
+                disabled={lockDspFeatures}
+                onClick={() => {
+                  if (!lockDspFeatures) setEq({ toneFocused: false });
+                }}
                 className={`${settingsUi.integrationPlain} ${settingsUi.linkRow}`}
               >
                 <span className={settingsUi.rowText}>
@@ -395,7 +445,10 @@ export default function AudioEqPage() {
 
               <button
                 type="button"
-                onClick={() => setEq({ toneFocused: true })}
+                disabled={lockDspFeatures}
+                onClick={() => {
+                  if (!lockDspFeatures) setEq({ toneFocused: true });
+                }}
                 className={`${settingsUi.integrationPlain} ${settingsUi.linkRow}`}
               >
                 <span className={settingsUi.rowText}>
@@ -407,6 +460,7 @@ export default function AudioEqPage() {
 
               <button
                 type="button"
+                disabled={lockDspFeatures}
                 onClick={resetFlat}
                 className="relative flex w-full items-center justify-center gap-1.5 px-4 py-3 type-body-emphasized text-key transition-colors hover:bg-tracklist-hover hairline-[16px]"
               >
@@ -418,18 +472,23 @@ export default function AudioEqPage() {
         ) : (
           <>
             <h2 className={settingsUi.sectionHeader}>Bands &amp; Presets</h2>
-            <section className={settingsUi.group}>
+            <section
+              className={`${settingsUi.group} ${bypassedRowClasses(lockDspFeatures)}`}
+              aria-disabled={lockDspFeatures || undefined}
+            >
               <div className={settingsUi.controlRow}>
                 <span>Preset</span>
                 <div className="flex items-center gap-2">
                   <Select<EqualizerPresetId>
                     label="Equalizer Preset"
                     value={eq.preset}
+                    disabled={lockDspFeatures}
                     options={(Object.keys(PRESET_MAP) as EqualizerPresetId[]).map((id) => ({
                       value: id,
                       label: PRESET_MAP[id].label,
                     }))}
                     onChange={(preset) => {
+                      if (lockDspFeatures) return;
                       const bands = PRESET_MAP[preset].bands;
                       setEq({
                         enabled: true,
@@ -440,6 +499,7 @@ export default function AudioEqPage() {
                   />
                   <button
                     type="button"
+                    disabled={lockDspFeatures}
                     onClick={resetFlat}
                     className={settingsUi.inlineButton}
                     title="Reset all bands to 0 dB"
@@ -466,9 +526,11 @@ export default function AudioEqPage() {
                         max={12}
                         step={0.5}
                         value={val}
+                        disabled={lockDspFeatures}
                         aria-label={`${label} band gain in dB`}
-                        className="h-28 w-2 cursor-pointer accent-key [writing-mode:vertical-lr] [direction:rtl]"
+                        className="h-28 w-2 cursor-pointer accent-key [writing-mode:vertical-lr] [direction:rtl] disabled:cursor-not-allowed"
                         onChange={(e) => {
+                          if (lockDspFeatures) return;
                           const next = [...eq.bandsDb] as EqConfig['bandsDb'];
                           next[idx] = Number(e.currentTarget.value);
                           setEq({ enabled: true, preset: 'custom', bandsDb: next });
@@ -485,7 +547,10 @@ export default function AudioEqPage() {
 
         {/* Channel Balance section matching EqualizerScreen.kt */}
         <h2 className={settingsUi.sectionHeader}>Balance</h2>
-        <section className={settingsUi.group}>
+        <section
+          className={`${settingsUi.group} ${bypassedRowClasses(lockDspFeatures)}`}
+          aria-disabled={lockDspFeatures || undefined}
+        >
           <div className="flex flex-col gap-3 px-4 py-4">
             <div className="flex items-center justify-between">
               <span className="type-title-3 text-primary">Left / Right Balance</span>
@@ -494,7 +559,10 @@ export default function AudioEqPage() {
                 {Math.abs(balance) > 0.01 && (
                   <button
                     type="button"
-                    onClick={() => setBalance(0)}
+                    disabled={lockDspFeatures}
+                    onClick={() => {
+                      if (!lockDspFeatures) setBalance(0);
+                    }}
                     className={settingsUi.inlineButton}
                   >
                     Center
@@ -510,9 +578,12 @@ export default function AudioEqPage() {
                 max={1}
                 step={0.05}
                 value={balance}
+                disabled={lockDspFeatures}
                 aria-label="Stereo channel balance"
-                onChange={(e) => setBalance(Number(e.currentTarget.value))}
-                className="h-2 flex-1 cursor-pointer accent-key"
+                onChange={(e) => {
+                  if (!lockDspFeatures) setBalance(Number(e.currentTarget.value));
+                }}
+                className="h-2 flex-1 cursor-pointer accent-key disabled:cursor-not-allowed"
               />
               <span className="type-caption-2 font-semibold text-secondary">R</span>
             </div>

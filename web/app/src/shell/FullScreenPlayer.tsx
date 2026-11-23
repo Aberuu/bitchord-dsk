@@ -23,6 +23,7 @@ import { MotionArtwork } from '@/components/music/MotionArtwork';
 import { VideoSurface } from '@/components/music/VideoSurface';
 import { useTrackMotion } from '@/data/apple/motionArt';
 import { useAudioPipeline } from '@/desktop/useAudioPipeline';
+import { useBitPerfectUi } from '@/desktop/useBitPerfectUi';
 import { sizedArtwork } from '@/lib/artwork';
 import { usePlayer } from '@/state/player';
 import { useUi } from '@/state/ui';
@@ -116,15 +117,24 @@ function HorizontalVolumeBar() {
   const volume = usePlayer((s) => s.volume);
   const muted = usePlayer((s) => s.muted);
   const { setVolume, toggleMute } = usePlayer.getState();
+  const { lockVolume } = useBitPerfectUi();
   const level = muted ? 0 : volume;
+  const displayLevel = lockVolume ? 1 : level;
 
   return (
-    <div className="mt-3 flex items-center gap-2.5">
+    <div
+      className={`mt-3 flex items-center gap-2.5 ${lockVolume ? 'opacity-40' : ''}`}
+      aria-disabled={lockVolume || undefined}
+      title={lockVolume ? 'Volume is bypassed in Bit-Perfect (WASAPI Exclusive) mode' : undefined}
+    >
       <button
         type="button"
-        onClick={toggleMute}
-        aria-label={muted ? 'Unmute' : 'Mute'}
-        className="grid size-6 flex-none place-items-center text-white/60 transition-colors hover:text-white"
+        disabled={lockVolume}
+        onClick={() => {
+          if (!lockVolume) toggleMute();
+        }}
+        aria-label={lockVolume ? 'Volume bypassed in Bit-Perfect mode' : muted ? 'Unmute' : 'Mute'}
+        className="grid size-6 flex-none place-items-center text-white/60 transition-colors hover:text-white disabled:cursor-not-allowed disabled:hover:text-white/60"
       >
         <Volume1 size={16} aria-hidden="true" />
       </button>
@@ -133,16 +143,24 @@ function HorizontalVolumeBar() {
         min={0}
         max={1}
         step={0.01}
-        value={level}
-        aria-label="Volume"
-        onChange={(e) => setVolume(Number(e.currentTarget.value))}
-        className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-white/22 accent-white"
+        value={displayLevel}
+        disabled={lockVolume}
+        aria-label={lockVolume ? 'Volume bypassed in Bit-Perfect mode' : 'Volume'}
+        onChange={(e) => {
+          if (!lockVolume) setVolume(Number(e.currentTarget.value));
+        }}
+        className={`h-1.5 flex-1 appearance-none rounded-full bg-white/22 accent-white ${
+          lockVolume ? 'cursor-not-allowed' : 'cursor-pointer'
+        }`}
       />
       <button
         type="button"
-        onClick={() => setVolume(1)}
+        disabled={lockVolume}
+        onClick={() => {
+          if (!lockVolume) setVolume(1);
+        }}
         aria-label="Max volume"
-        className="grid size-6 flex-none place-items-center text-white/60 transition-colors hover:text-white"
+        className="grid size-6 flex-none place-items-center text-white/60 transition-colors hover:text-white disabled:cursor-not-allowed disabled:hover:text-white/60"
       >
         <Volume2 size={16} aria-hidden="true" />
       </button>

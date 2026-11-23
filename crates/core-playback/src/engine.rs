@@ -557,6 +557,25 @@ fn render_next_block(
                 }
             }
             stretcher.process_stereo(&scratch, out_stereo);
+        } else if bypass_dsp && (src_rate - output_rate.max(1) as f64).abs() < 1e-6 {
+            let mut idx = track.frame_cursor.round() as usize;
+            for i in 0..out_frames {
+                if idx < total_frames {
+                    out_stereo[i * 2] = samples[idx * 2];
+                    out_stereo[i * 2 + 1] = samples[idx * 2 + 1];
+                    idx += 1;
+                    track.frame_cursor = idx as f64;
+                } else if let Some((next_id, next_audio)) = track.next_audio.take() {
+                    track.id = next_id;
+                    track.audio = next_audio;
+                    track.frame_cursor = 0.0;
+                    break;
+                } else {
+                    finished_track_id = Some(track.id.clone());
+                    guard.status = "idle".into();
+                    break;
+                }
+            }
         } else {
             let step = src_rate / output_rate.max(1) as f64;
             for i in 0..out_frames {
@@ -696,6 +715,54 @@ fn run_cpal_shared_loop(
 }
 
 #[cfg(windows)]
+fn initialize_exclusive_client(
+    device: &wasapi::Device,
+    wave_fmt: &wasapi::WaveFormat,
+    sample_rate: u32,
+) -> Result<wasapi::AudioClient> {
+    use wasapi::{Direction, ShareMode, WasapiError};
+
+    // AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED (0x88890019), commonly returned on HDAudio endpoints.
+    const AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED: i32 = 0x8889_0019_u32 as i32;
+
+    let mut client = device.get_iaudioclient().map_err(|e| anyhow!("{e}"))?;
+    let (def_period, min_period) = client.get_periods().map_err(|e| anyhow!("{e}"))?;
+    let desired_period = def_period.max(min_period).max(100_000);
+    let aligned_period = client
+        .calculate_aligned_period_near(desired_period, Some(128), wave_fmt)
+        .unwrap_or(desired_period);
+
+    match client.initialize_client(
+        wave_fmt,
+        aligned_period,
+        &Direction::Render,
+        &ShareMode::Exclusive,
+        false,
+    ) {
+        Ok(()) => Ok(client),
+        Err(WasapiError::Windows(win_err))
+            if win_err.code().0 == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED =>
+        {
+            let buffer_frames = client.get_bufferframecount().map_err(|e| anyhow!("{e}"))?;
+            let exact_period =
+                ((10_000_000.0 * buffer_frames as f64 / sample_rate.max(1) as f64) + 0.5) as i64;
+            let mut retry_client = device.get_iaudioclient().map_err(|e| anyhow!("{e}"))?;
+            retry_client
+                .initialize_client(
+                    wave_fmt,
+                    exact_period,
+                    &Direction::Render,
+                    &ShareMode::Exclusive,
+                    false,
+                )
+                .map_err(|e| anyhow!("WASAPI Exclusive init failed: {e}"))?;
+            Ok(retry_client)
+        }
+        Err(err) => Err(anyhow!("WASAPI Exclusive init failed: {err}")),
+    }
+}
+
+#[cfg(windows)]
 fn run_wasapi_exclusive_loop(
     device_id: Option<&str>,
     source_rate_hz: u32,
@@ -708,14 +775,13 @@ fn run_wasapi_exclusive_loop(
 ) -> Result<()> {
     use crate::sink::{open_wasapi_device, ComMtaGuard};
     use std::collections::VecDeque;
-    use wasapi::{Direction, SampleType, ShareMode, WaveFormat};
+    use wasapi::{SampleType, WaveFormat};
 
     let _com = ComMtaGuard::acquire();
     let (out_rate, valid_bits, container_bits, exact, friendly) =
         probe_wasapi_exclusive_format(device_id, source_rate_hz, source_bits, 2)?;
 
     let device = open_wasapi_device(device_id)?;
-    let mut client = device.get_iaudioclient().map_err(|e| anyhow!("{e}"))?;
     let wave_fmt = WaveFormat::new(
         container_bits as usize,
         valid_bits as usize,
@@ -724,11 +790,7 @@ fn run_wasapi_exclusive_loop(
         2,
         None,
     );
-    let (_def_period, min_period) = client.get_periods().map_err(|e| anyhow!("{e}"))?;
-    let period = min_period.max(100_000);
-    client
-        .initialize_client(&wave_fmt, period, &Direction::Render, &ShareMode::Exclusive, true)
-        .map_err(|e| anyhow!("WASAPI Exclusive init failed: {e}"))?;
+    let client = initialize_exclusive_client(&device, &wave_fmt, out_rate)?;
 
     let h_event = client.set_get_eventhandle().map_err(|e| anyhow!("{e}"))?;
     let render_client = client.get_audiorenderclient().map_err(|e| anyhow!("{e}"))?;
@@ -769,15 +831,21 @@ fn run_wasapi_exclusive_loop(
     let mut float_block = vec![0.0f32; buffer_frames.max(256) * 2];
     let mut pcm_scratch = Vec::new();
 
+    // Prime one silent buffer so event-driven Exclusive drivers start signaling immediately.
+    let initial_silence = vec![0u8; buffer_frames * frame_bytes];
+    let _ = render_client.write_to_device(buffer_frames, &initial_silence, None);
+
     client.start_stream().map_err(|e| anyhow!("{e}"))?;
     signal_ready(ready_tx);
     let mut last_event = Instant::now();
     while !stop_flag.load(Ordering::Relaxed) {
-        if h_event.wait_for_event(100).is_ok() {
-            last_event = Instant::now();
-        } else if last_event.elapsed() > Duration::from_secs(2) {
-            break;
+        if h_event.wait_for_event(100).is_err() {
+            if last_event.elapsed() > Duration::from_secs(2) {
+                break;
+            }
+            continue;
         }
+        last_event = Instant::now();
         let needed_bytes = buffer_frames * frame_bytes;
         while pending_bytes.len() < needed_bytes {
             if let Some(ref tap) = tap_source {
@@ -789,7 +857,7 @@ fn run_wasapi_exclusive_loop(
                     source_rate_hz,
                     &mut eq,
                     &mut stretcher,
-                    exact,
+                    true,
                     &on_ended,
                 );
             }
@@ -932,5 +1000,54 @@ mod tests {
         done_rx
             .recv_timeout(Duration::from_secs(10))
             .expect("concurrent route switches and hotplug deadlocked");
+    }
+
+    #[test]
+    fn bypass_dsp_passes_source_pcm_bit_for_bit_despite_eq_speed_and_volume() {
+        let engine = NativeAudioEngine::new(Arc::new(|_| {}));
+        let source_pcm = vec![0.125f32, -0.25, 0.5, -0.75, 0.333, -0.444, 0.0, 0.875];
+        {
+            let mut guard = engine.shared.lock();
+            guard.status = "playing".into();
+            guard.volume = 0.2;
+            guard.muted = true;
+            guard.settings.playback_rate = 1.75;
+            guard.settings.eq = EqConfig {
+                enabled: true,
+                bands_db: [9.0, -6.0, 6.0, -3.0, 6.0, 3.0, -6.0],
+                ..EqConfig::default()
+            };
+            guard.eq_dirty = true;
+            guard.track = Some(ActiveTrack {
+                id: "local:test".into(),
+                audio: Arc::new(DecodedAudio {
+                    samples_stereo_f32: source_pcm.clone(),
+                    sample_rate_hz: 96_000,
+                    bit_depth: 24,
+                    channels: 2,
+                    duration_sec: 4.0 / 96_000.0,
+                    codec: "FLAC".into(),
+                }),
+                frame_cursor: 0.0,
+                next_audio: None,
+            });
+        }
+
+        let mut eq = EqualizerProcessor::new(96_000);
+        let mut stretcher = TimeStretcher::new(96_000);
+        let mut out = vec![0.0f32; source_pcm.len()];
+        let on_ended: Arc<dyn Fn(String) + Send + Sync> = Arc::new(|_| {});
+
+        render_next_block(
+            &engine.shared,
+            &mut out,
+            96_000,
+            &mut eq,
+            &mut stretcher,
+            true,
+            &on_ended,
+        );
+
+        assert_eq!(out, source_pcm);
     }
 }

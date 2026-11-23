@@ -140,14 +140,39 @@ function discordText(status: DiscordStatus): string {
   return `${user.name} · on`;
 }
 
-export function Toggle({ label, detail, checked, onChange }: { label: string; detail?: string; checked: boolean; onChange: (on: boolean) => void }) {
+export function Toggle({
+  label,
+  detail,
+  checked,
+  onChange,
+  disabled = false,
+  className = '',
+}: {
+  label: string;
+  detail?: string;
+  checked: boolean;
+  onChange: (on: boolean) => void;
+  disabled?: boolean;
+  className?: string;
+}) {
   return (
-    <label className={settingsUi.controlRow}>
+    <label
+      className={className ? `${settingsUi.controlRow} ${className}` : settingsUi.controlRow}
+      aria-disabled={disabled || undefined}
+    >
       <span className={settingsUi.rowText}>
         <span>{label}</span>
         {detail && <span className={settingsUi.rowDetail}>{detail}</span>}
       </span>
-      <input type="checkbox" className={settingsUi.switch} checked={checked} onChange={(e) => onChange(e.currentTarget.checked)} />
+      <input
+        type="checkbox"
+        className={settingsUi.switch}
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => {
+          if (!disabled) onChange(e.currentTarget.checked);
+        }}
+      />
     </label>
   );
 }

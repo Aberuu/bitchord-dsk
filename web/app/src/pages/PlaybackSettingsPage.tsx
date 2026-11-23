@@ -11,15 +11,23 @@ import {
   VolumeX,
   Waves,
 } from 'lucide-react';
+import { useState } from 'react';
 import { PrefetchLink } from '@/components/PrefetchLink';
 import { Select } from '@/components/Select';
 import { SubpageHeader } from '@/components/SubpageHeader';
+import {
+  BitPerfectConfirmBanner,
+  BIT_PERFECT_BYPASSED_FOOTER,
+  bypassedRowClasses,
+} from '@/desktop/BitPerfectBypass';
+import { isExclusiveOutputMode } from '@/desktop/bitPerfectMode';
 import {
   isTauriDesktop,
   type AudioSettings,
   type OutputMode,
 } from '@/desktop/tauriBridge';
 import { useAudioPipeline } from '@/desktop/useAudioPipeline';
+import { useBitPerfectUi } from '@/desktop/useBitPerfectUi';
 import { refreshDesktopAudioState, useDesktopAudioDevices } from '@/desktop/useDesktopAudioDevices';
 import { AUTOMIX_BARS } from '@/playback/automix/choices';
 import {
@@ -48,9 +56,11 @@ const SLEEP_OPTIONS: { value: string; label: string }[] = [
 function PillCrossfadeSlider({
   value,
   onChange,
+  disabled = false,
 }: {
   value: number;
   onChange: (seconds: number) => void;
+  disabled?: boolean;
 }) {
   const pct = (Math.max(0, Math.min(12, value)) / 12) * 100;
   return (
@@ -72,9 +82,12 @@ function PillCrossfadeSlider({
         max={12}
         step={1}
         value={value}
+        disabled={disabled}
         aria-label="Crossfade duration in seconds"
-        onChange={(e) => onChange(Number(e.currentTarget.value))}
-        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+        onChange={(e) => {
+          if (!disabled) onChange(Number(e.currentTarget.value));
+        }}
+        className={`absolute inset-0 h-full w-full opacity-0 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
       />
     </div>
   );
@@ -119,10 +132,14 @@ export default function PlaybackSettingsPage() {
     enabled: desktop,
     live: true,
   });
+  const { lockDspFeatures } = useBitPerfectUi();
+  const [pendingOutputMode, setPendingOutputMode] = useState<OutputMode | null>(null);
 
   const snap = snapQuery.data;
   const settings = snap?.settings;
   const devices = devicesQuery.data ?? [];
+  const dspLocked =
+    lockDspFeatures || (desktop && isExclusiveOutputMode(settings?.outputMode));
 
   const patchNative = (patch: Partial<AudioSettings>) => {
     if (!settings) return;
@@ -229,9 +246,27 @@ export default function PlaybackSettingsPage() {
                     { value: 'wasapi_exclusive', label: 'WASAPI Exclusive' },
                     ...(snap.asioAvailable ? [{ value: 'asio' as const, label: 'ASIO Driver' }] : []),
                   ]}
-                  onChange={(outputMode) => patchNative({ outputMode })}
+                  onChange={(outputMode) => {
+                    if (outputMode === 'shared') {
+                      setPendingOutputMode(null);
+                      patchNative({ outputMode });
+                    } else if (outputMode !== settings.outputMode) {
+                      setPendingOutputMode(outputMode);
+                    }
+                  }}
                 />
               </label>
+
+              {pendingOutputMode && (
+                <BitPerfectConfirmBanner
+                  variant="page"
+                  onCancel={() => setPendingOutputMode(null)}
+                  onConfirm={() => {
+                    patchNative({ outputMode: pendingOutputMode });
+                    setPendingOutputMode(null);
+                  }}
+                />
+              )}
 
               <label className={settingsUi.controlRow}>
                 <span className={settingsUi.rowText}>
@@ -284,7 +319,10 @@ export default function PlaybackSettingsPage() {
           )}
 
           {/* Loudness normalization */}
-          <label className={settingsUi.controlRow}>
+          <label
+            className={`${settingsUi.controlRow} ${bypassedRowClasses(dspLocked)}`}
+            aria-disabled={dspLocked || undefined}
+          >
             <span className="flex min-w-0 flex-1 items-center gap-3.5">
               <span className={settingsUi.iconPlain}>
                 <Volume2 size={20} strokeWidth={2} aria-hidden="true" />
@@ -298,12 +336,18 @@ export default function PlaybackSettingsPage() {
               type="checkbox"
               className={settingsUi.switch}
               checked={loudnessNormalization}
-              onChange={(e) => setLoudnessNormalization(e.currentTarget.checked)}
+              disabled={dspLocked}
+              onChange={(e) => {
+                if (!dspLocked) setLoudnessNormalization(e.currentTarget.checked);
+              }}
             />
           </label>
 
           {/* Crossfade thick pill slider matching Screenshot 3 & 4 */}
-          <div className="relative flex flex-col gap-3 px-4 py-4 hairline-[16px]">
+          <div
+            className={`relative flex flex-col gap-3 px-4 py-4 hairline-[16px] ${bypassedRowClasses(dspLocked)}`}
+            aria-disabled={dspLocked || undefined}
+          >
             <div className="flex items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-3.5">
                 <span className={settingsUi.iconPlain}>
@@ -315,19 +359,25 @@ export default function PlaybackSettingsPage() {
                 </div>
               </div>
               <span className="type-body-reduced tabular-nums text-secondary">
-                {automix ? 'Automix' : crossfadeSec === 0 ? 'Off' : `${crossfadeSec}s`}
+                {dspLocked ? 'Off (Bit-Perfect)' : automix ? 'Automix' : crossfadeSec === 0 ? 'Off' : `${crossfadeSec}s`}
               </span>
             </div>
             <div className="pl-10">
               <PillCrossfadeSlider
-                value={automix ? 0 : crossfadeSec}
-                onChange={(sec) => setCrossfade(sec)}
+                value={dspLocked || automix ? 0 : crossfadeSec}
+                disabled={dspLocked}
+                onChange={(sec) => {
+                  if (!dspLocked) setCrossfade(sec);
+                }}
               />
             </div>
           </div>
 
           {/* Automix */}
-          <label className={settingsUi.controlRow}>
+          <label
+            className={`${settingsUi.controlRow} ${bypassedRowClasses(dspLocked)}`}
+            aria-disabled={dspLocked || undefined}
+          >
             <span className="flex min-w-0 flex-1 items-start gap-3.5">
               <span className={`${settingsUi.iconPlain} mt-0.5`}>
                 <Sparkles size={19} strokeWidth={2} aria-hidden="true" />
@@ -343,12 +393,18 @@ export default function PlaybackSettingsPage() {
               type="checkbox"
               className={settingsUi.switch}
               checked={automix}
-              onChange={(e) => setAutomix(e.currentTarget.checked)}
+              disabled={dspLocked}
+              onChange={(e) => {
+                if (!dspLocked) setAutomix(e.currentTarget.checked);
+              }}
             />
           </label>
 
           {/* Automix performance & bars */}
-          <label className={settingsUi.controlRow}>
+          <label
+            className={`${settingsUi.controlRow} ${bypassedRowClasses(dspLocked)}`}
+            aria-disabled={dspLocked || undefined}
+          >
             <span className="flex min-w-0 flex-1 items-center gap-3.5">
               <span className={settingsUi.iconPlain}>
                 <Cpu size={19} strokeWidth={2} aria-hidden="true" />
@@ -361,6 +417,7 @@ export default function PlaybackSettingsPage() {
             <Select<AutomixPerformance>
               label="Automix performance"
               value={automixPerformance}
+              disabled={dspLocked}
               options={[
                 { value: 'low', label: 'Low' },
                 { value: 'balanced', label: 'Balanced' },
@@ -371,11 +428,15 @@ export default function PlaybackSettingsPage() {
           </label>
 
           {automix && (
-            <label className={settingsUi.controlRow}>
+            <label
+              className={`${settingsUi.controlRow} ${bypassedRowClasses(dspLocked)}`}
+              aria-disabled={dspLocked || undefined}
+            >
               <span className="pl-10">Blend length</span>
               <Select<number>
                 label="Blend length"
                 value={automixBars}
+                disabled={dspLocked}
                 options={AUTOMIX_BARS.map((b) => ({ value: b, label: `Up to ${b} bars` }))}
                 onChange={setAutomixBars}
               />
@@ -383,7 +444,10 @@ export default function PlaybackSettingsPage() {
           )}
 
           {/* Skip silence */}
-          <label className={settingsUi.controlRow}>
+          <label
+            className={`${settingsUi.controlRow} ${bypassedRowClasses(dspLocked)}`}
+            aria-disabled={dspLocked || undefined}
+          >
             <span className="flex min-w-0 flex-1 items-center gap-3.5">
               <span className={settingsUi.iconPlain}>
                 <VolumeX size={19} strokeWidth={2} aria-hidden="true" />
@@ -397,12 +461,18 @@ export default function PlaybackSettingsPage() {
               type="checkbox"
               className={settingsUi.switch}
               checked={skipSilence}
-              onChange={(e) => setSkipSilence(e.currentTarget.checked)}
+              disabled={dspLocked}
+              onChange={(e) => {
+                if (!dspLocked) setSkipSilence(e.currentTarget.checked);
+              }}
             />
           </label>
 
           {/* Spatial audio */}
-          <label className={settingsUi.controlRow}>
+          <label
+            className={`${settingsUi.controlRow} ${bypassedRowClasses(dspLocked)}`}
+            aria-disabled={dspLocked || undefined}
+          >
             <span className="flex min-w-0 flex-1 items-center gap-3.5">
               <span className={settingsUi.iconPlain}>
                 <Speaker size={19} strokeWidth={2} aria-hidden="true" />
@@ -416,22 +486,37 @@ export default function PlaybackSettingsPage() {
               type="checkbox"
               className={settingsUi.switch}
               checked={spatialAudio}
-              onChange={(e) => setSpatialAudio(e.currentTarget.checked)}
+              disabled={dspLocked}
+              onChange={(e) => {
+                if (!dspLocked) setSpatialAudio(e.currentTarget.checked);
+              }}
             />
           </label>
 
           {/* Equalizer subpage link */}
-          <PrefetchLink to="/settings/audio" className={`${settingsUi.integration} ${settingsUi.linkRow}`}>
+          <PrefetchLink
+            to="/settings/audio"
+            aria-disabled={dspLocked || undefined}
+            tabIndex={dspLocked ? -1 : undefined}
+            onClick={(e) => {
+              if (dspLocked) e.preventDefault();
+            }}
+            className={`${settingsUi.integration} ${settingsUi.linkRow} ${bypassedRowClasses(dspLocked)}`}
+          >
             <span className={settingsUi.iconPlain}>
               <SlidersHorizontal size={19} strokeWidth={2} aria-hidden="true" />
             </span>
             <span className={settingsUi.rowText}>
               <span className="type-title-3 text-primary">Equalizer</span>
-              <span className={settingsUi.rowDetail}>Tone, seven bands and balance</span>
+              <span className={settingsUi.rowDetail}>
+                {dspLocked ? 'Bypassed while Bit-Perfect mode is on' : 'Tone, seven bands and balance'}
+              </span>
             </span>
             <ChevronRight size={17} className="text-tertiary" aria-hidden="true" />
           </PrefetchLink>
         </section>
+
+        {dspLocked && <p className={settingsUi.footer}>{BIT_PERFECT_BYPASSED_FOOTER}</p>}
 
         <h2 className={settingsUi.sectionHeader}>Queue, Speed &amp; Timer</h2>
         <section className={settingsUi.group}>
@@ -441,13 +526,24 @@ export default function PlaybackSettingsPage() {
             checked={autoplay}
             onChange={setAutoplay}
           />
-          <label className={settingsUi.controlRow}>
-            <span>Playback speed</span>
+          <label
+            className={`${settingsUi.controlRow} ${bypassedRowClasses(dspLocked)}`}
+            aria-disabled={dspLocked || undefined}
+          >
+            <span className={settingsUi.rowText}>
+              <span>Playback speed</span>
+              {dspLocked && (
+                <span className={settingsUi.rowDetail}>Locked at 1x while Bit-Perfect mode is on</span>
+              )}
+            </span>
             <Select
               label="Playback speed"
-              value={playbackRate}
+              value={dspLocked ? 1 : playbackRate}
+              disabled={dspLocked}
               options={SPEED_OPTIONS}
-              onChange={(rate) => setPlaybackRate(rate)}
+              onChange={(rate) => {
+                if (!dspLocked) setPlaybackRate(rate);
+              }}
             />
           </label>
           <label className={settingsUi.controlRow}>

@@ -162,4 +162,94 @@ describe('audioPipelineData', () => {
     expect(outputStage.rows.find((r) => r.label === 'Transport')?.value).toBe('WASAPI Shared Tap');
     expect(summary.stages[2]!.rows.find((r) => r.label === 'Type')?.value).toBe('Desktop Tap Resampler');
   });
+
+  it('shows all DSP stages bypassed when WASAPI Exclusive (Bit-Perfect) is active', () => {
+    const summary = buildAudioPipelineData({
+      nowPlaying: {
+        videoId: 'local:flac-1',
+        streamInfo: 'FLAC · WASAPI Exclusive',
+        stream: { codec: 'FLAC', sampleRateHz: 192000, bitrateKbps: 5500, channels: 2 },
+      },
+      eq: {
+        ...DEFAULT_EQ_CONFIG,
+        enabled: true,
+        preset: 'bass_boost',
+        bandsDb: [...PRESET_MAP.bass_boost.bands!],
+      },
+      balance: 0.4,
+      spatialAudio: true,
+      loudnessNormalization: true,
+      outputPrecision: 'float32',
+      bitPerfect: {
+        active: true,
+        driver: 'WASAPI Exclusive',
+        deviceName: 'Speakers (SNOWSKY Tiny B)',
+        sampleRateHz: 192000,
+        outputBits: 24,
+        sourceBits: 24,
+        sourceRateHz: 192000,
+        exact: true,
+        dacLimited: false,
+        fallbackReason: null,
+      },
+      nativeSnapshot: {
+        active: true,
+        tapActive: false,
+        status: 'playing',
+        trackId: 'local:flac-1',
+        positionSec: 5,
+        durationSec: 180,
+        volume: 1,
+        playbackRate: 1.5,
+        codec: 'FLAC',
+        sampleRateHz: 192000,
+        bitDepth: 24,
+        channels: 2,
+        bitPerfect: {
+          active: true,
+          driver: 'WASAPI Exclusive',
+          deviceName: 'Speakers (SNOWSKY Tiny B)',
+          sampleRateHz: 192000,
+          outputBits: 24,
+          sourceBits: 24,
+          sourceRateHz: 192000,
+          exact: true,
+          dacLimited: false,
+          fallbackReason: null,
+        },
+        asioAvailable: false,
+        eqCurvePoints: [],
+        settings: {
+          outputMode: 'wasapi_exclusive',
+          deviceId: 'wasapi_id:dac-1',
+          playbackRate: 1.5,
+          sleepTimerEndEpochMs: null,
+          sleepAfterTrack: false,
+          eq: {
+            ...DEFAULT_EQ_CONFIG,
+            enabled: true,
+            preset: 'bass_boost',
+            bandsDb: [...PRESET_MAP.bass_boost.bands!],
+          },
+        },
+      },
+      devices: [],
+      webAudioSampleRateHz: 48000,
+      desktop: true,
+    });
+
+    const resamplerStage = summary.stages[2]!;
+    expect(resamplerStage.rows.find((r) => r.label === 'Type')?.value).toBe('None');
+    expect(resamplerStage.rows.find((r) => r.label === 'Quality')?.value).toBe('Passthrough');
+
+    const dspStage = summary.stages[3]!;
+    expect(dspStage.rows.find((r) => r.label === 'EQ Preset')?.value).toBe('Bypassed (Bit-Perfect)');
+    expect(dspStage.rows.find((r) => r.label === 'Gain')?.value).toBe('Off (Bit-Perfect)');
+    expect(dspStage.rows.find((r) => r.label === 'Measured')?.value).toBe('-');
+    expect(dspStage.rows.find((r) => r.label === 'Stereo Expand')?.value).toBe('100% (Bypassed)');
+    expect(dspStage.rows.find((r) => r.label === 'Bit-exact')?.value).toContain('Yes (bit-perfect');
+
+    const outputStage = summary.stages[4]!;
+    expect(outputStage.rows.find((r) => r.label === 'Direct')?.value).toContain('Bit-exact');
+  });
 });

@@ -310,9 +310,34 @@ describe('AudioOutputModal', () => {
       findButton('WASAPI Exclusive (Bit-Perfect)')!.click();
     });
     await flushUi();
+    // Clicking Exclusive from Off shows the bypass confirmation before switching mode.
+    expect(host.textContent).toContain('Enable WASAPI Exclusive (Bit-Perfect)?');
+    expect(updateSettingsMock).not.toHaveBeenLastCalledWith(
+      expect.objectContaining({ outputMode: 'wasapi_exclusive' }),
+    );
+
+    await act(async () => {
+      findButton('Cancel')!.click();
+    });
+    await flushUi();
+    expect(host.textContent).not.toContain('Enable WASAPI Exclusive (Bit-Perfect)?');
+
+    await act(async () => {
+      findButton('WASAPI Exclusive (Bit-Perfect)')!.click();
+    });
+    await flushUi();
+    await act(async () => {
+      findButton('Enable')!.click();
+    });
+    await flushUi();
     expect(updateSettingsMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ deviceId: 'wasapi_id:{spk}', outputMode: 'wasapi_exclusive' }),
     );
+    const lockedVol = host.querySelector<HTMLInputElement>(
+      'input[aria-label="Output volume bypassed in Bit-Perfect mode"]',
+    );
+    expect(lockedVol?.disabled).toBe(true);
+    expect(host.textContent).toContain('Bypassed');
 
     await act(async () => {
       findButton('This PC (Default Output)')!.click();
@@ -321,5 +346,7 @@ describe('AudioOutputModal', () => {
     expect(updateSettingsMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ deviceId: null }),
     );
+    const unlockedVol = host.querySelector<HTMLInputElement>('input[aria-label="Output volume"]');
+    expect(unlockedVol?.disabled).toBe(false);
   });
 });

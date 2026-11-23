@@ -3,6 +3,7 @@ import type {
   BitPerfectStatus,
   NativePlaybackSnapshot,
 } from '@/desktop/tauriBridge';
+import { isBitPerfectBypassActive, isExclusiveOutputMode } from '@/desktop/bitPerfectMode';
 import { computeEqCurve, presetLabel, type EqConfig } from '@/playback/webAudioEq';
 
 export type PipelineOutputPrecision = 'pcm16' | 'float32';
@@ -163,7 +164,7 @@ export function buildAudioPipelineData(input: PipelineInput): AudioPipelineSumma
 
   const resamplerType = !sourceRateHz
     ? NONE
-    : isPassthrough
+    : (bitPerfect?.active && bitPerfect.exact) || isPassthrough
       ? 'None'
       : nativeActive
         ? 'Rubato Sinc Resampler'
@@ -173,25 +174,31 @@ export function buildAudioPipelineData(input: PipelineInput): AudioPipelineSumma
 
   const resamplerQuality = !sourceRateHz
     ? NONE
-    : isPassthrough
+    : (bitPerfect?.active && bitPerfect.exact) || isPassthrough
       ? 'Passthrough'
       : 'Resampled';
 
-  const eqCurve = computeEqCurve(eq);
-  const eqPresetText = eq.enabled
-    ? eq.mode === 'tone'
-      ? `Tone Pad (${eq.toneX >= 0 ? `+${eq.toneX}` : eq.toneX}, ${eq.toneY >= 0 ? `+${eq.toneY}` : eq.toneY})`
-      : presetLabel(eq.preset)
-    : 'Flat';
-
-  const stereoExpandText = spatialAudio ? '250%' : '100%';
-  const loudnessGainText = !loudnessNormalization
-    ? 'Off'
-    : eq.enabled
-      ? `${(eqCurve.preampDb - 0.7).toFixed(1)} dB`
-      : '-0.7 dB';
-
   const selectedMode = nativeSnapshot?.settings.outputMode ?? 'shared';
+  const bitPerfectBypass = isBitPerfectBypassActive(nativeSnapshot?.settings, bitPerfect);
+
+  const eqCurve = computeEqCurve(eq);
+  const eqPresetText = bitPerfectBypass
+    ? 'Bypassed (Bit-Perfect)'
+    : eq.enabled
+      ? eq.mode === 'tone'
+        ? `Tone Pad (${eq.toneX >= 0 ? `+${eq.toneX}` : eq.toneX}, ${eq.toneY >= 0 ? `+${eq.toneY}` : eq.toneY})`
+        : presetLabel(eq.preset)
+      : 'Flat';
+
+  const stereoExpandText = bitPerfectBypass ? '100% (Bypassed)' : spatialAudio ? '250%' : '100%';
+  const loudnessGainText = bitPerfectBypass
+    ? 'Off (Bit-Perfect)'
+    : !loudnessNormalization
+      ? 'Off'
+      : eq.enabled
+        ? `${(eqCurve.preampDb - 0.7).toFixed(1)} dB`
+        : '-0.7 dB';
+
   const outputApi = bitPerfect?.driver
     ? bitPerfect.driver
     : !desktop
@@ -211,10 +218,15 @@ export function buildAudioPipelineData(input: PipelineInput): AudioPipelineSumma
     if (bitPerfect?.active && bitPerfect.dacLimited) {
       return `No (converted with TPDF dither for ${bitPerfect.deviceName ?? 'DAC'})`;
     }
-    if (eq.enabled) return 'No (equalizer active)';
-    if (spatialAudio) return 'No (spatial audio active)';
-    if (Math.abs(balance) > 0.01) return 'No (channel balance shifted)';
-    if (loudnessNormalization) return 'No (loudness normalization)';
+    if (bitPerfect?.active) {
+      return `Active (${bitPerfect.driver ?? 'WASAPI Exclusive'} · non-lossless source)`;
+    }
+    if (!bitPerfectBypass) {
+      if (eq.enabled) return 'No (equalizer active)';
+      if (spatialAudio) return 'No (spatial audio active)';
+      if (Math.abs(balance) > 0.01) return 'No (channel balance shifted)';
+      if (loudnessNormalization) return 'No (loudness normalization)';
+    }
     if (isPassthrough) {
       return `Yes (${decoderFormat} -> ${outputPrecision === 'float32' ? 'Float32' : 'PCM16'})`;
     }
@@ -235,11 +247,13 @@ export function buildAudioPipelineData(input: PipelineInput): AudioPipelineSumma
         : 'DESKTOP (System Default)';
 
   const directText = bitPerfect?.active
-    ? `Active (${bitPerfect.driver ?? 'WASAPI Exclusive'}, bypasses mixer)`
-    : desktop && selectedMode === 'wasapi_exclusive'
+    ? bitPerfect.exact
+      ? `Bit-exact (${bitPerfect.driver ?? 'WASAPI Exclusive'}, bypasses mixer)`
+      : `Active (${bitPerfect.driver ?? 'WASAPI Exclusive'} · non-lossless source)`
+    : desktop && isExclusiveOutputMode(selectedMode)
       ? tapActive
         ? 'Active via WASAPI Exclusive Tap'
-        : 'Armed (activates on local lossless files or custom device)'
+        : 'Armed (activates on playback or custom device)'
       : tapActive
         ? `Active Tap (${matchedDevice?.name ?? 'Selected output'})`
         : 'Shared Mixed Path (Windows Audio Engine)';
@@ -313,7 +327,7 @@ export function buildAudioPipelineData(input: PipelineInput): AudioPipelineSumma
           { label: 'PCM Format', value: 'Float32' },
           { label: 'Sample Rate', value: formatSampleRate(outRateHz) },
           { label: 'Gain', value: loudnessGainText },
-          { label: 'Measured', value: loudnessNormalization ? '-14.0 LUFS target' : NONE },
+          { label: 'Measured', value: !bitPerfectBypass && loudnessNormalization ? '-14.0 LUFS target' : NONE },
           { label: 'EQ Preset', value: eqPresetText },
           { label: 'Stereo Expand', value: stereoExpandText },
           { label: 'Buffers', value: `2x (20 ms, ${Math.round(outRateHz * 0.02)} frames)` },

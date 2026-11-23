@@ -1,6 +1,7 @@
 import type { DetectedExtension } from '@bitchord/shared/bridge';
 import { create } from 'zustand';
 import type { Track } from '@/data/music/types';
+import { isBitPerfectBypassActive, isExclusiveOutputMode } from '@/desktop/bitPerfectMode';
 import {
   desktopApi,
   isTauriDesktop,
@@ -110,6 +111,7 @@ interface PlayerState extends Settings {
   mixing: boolean;
   sleepTimerEndMs: number | null;
   sleepAfterTrack: boolean;
+  desktopOutputMode: AudioSettings['outputMode'];
   bitPerfectStatus: BitPerfectStatus | null;
   nativeActive: boolean;
   nativePlayhead: NativePlayheadState | null;
@@ -293,9 +295,26 @@ export function getAudioContextSampleRate(): number | null {
 }
 
 const localTrackMeta = new Map<string, { filePath: string; codec?: string }>();
+let localHandoffInFlight = false;
 
 function getCachedAudioSettings(): AudioSettings | null {
   return queryClient.getQueryData<NativePlaybackSnapshot>(['desktop', 'audio', 'snapshot'])?.settings ?? null;
+}
+
+function bitPerfectBypassActive(explicitSettings?: AudioSettings | null): boolean {
+  const mode =
+    explicitSettings?.outputMode ??
+    getCachedAudioSettings()?.outputMode ??
+    usePlayer.getState().desktopOutputMode;
+  return isBitPerfectBypassActive({ outputMode: mode }, usePlayer.getState().bitPerfectStatus);
+}
+
+function applyEffectivePlaybackRate(explicitSettings?: AudioSettings | null) {
+  const rate = bitPerfectBypassActive(explicitSettings) ? 1 : usePlayer.getState().playbackRate;
+  for (const d of decks ?? []) {
+    d.audio.playbackRate = rate;
+    d.audio.preservesPitch = true;
+  }
 }
 
 async function resolveDesktopAudioSettings(): Promise<AudioSettings | null> {
@@ -305,7 +324,10 @@ async function resolveDesktopAudioSettings(): Promise<AudioSettings | null> {
   const snap = await desktopApi.audioSnapshot().catch(() => null);
   if (snap) {
     queryClient.setQueryData(['desktop', 'audio', 'snapshot'], snap);
-    usePlayer.setState({ bitPerfectStatus: snap.bitPerfect });
+    usePlayer.setState({
+      bitPerfectStatus: snap.bitPerfect,
+      desktopOutputMode: snap.settings.outputMode,
+    });
   }
   return snap?.settings ?? null;
 }
@@ -318,6 +340,44 @@ function desktopTapWanted(settings: AudioSettings | null = getCachedAudioSetting
 export async function syncDesktopOutputRoute(explicitSettings?: AudioSettings): Promise<void> {
   if (!isTauriDesktop()) return;
   const settings = explicitSettings ?? (await resolveDesktopAudioSettings());
+  if (settings) {
+    usePlayer.setState({ desktopOutputMode: settings.outputMode });
+  }
+
+  const bypass = bitPerfectBypassActive(settings);
+  if (bypass) {
+    cancelCrossfade();
+    graph?.dj.stop();
+  }
+  applyEffectivePlaybackRate(settings);
+  applyCurrentDsp(graph, settings);
+  applyVolumes();
+
+  const state = usePlayer.getState();
+  const entry = state.queue[state.index];
+  const isLocalTrack =
+    entry?.track.videoId.startsWith('local:') &&
+    state.nowPlaying?.videoId === entry.track.videoId;
+  const isLoaded =
+    state.status === 'playing' || state.status === 'paused' || state.status === 'buffering';
+  const exclusive = isExclusiveOutputMode(settings?.outputMode);
+  if (
+    isLocalTrack &&
+    isLoaded &&
+    !localHandoffInFlight &&
+    ((exclusive && !state.nativeActive) || (!exclusive && state.nativeActive))
+  ) {
+    const resumeSec = getPlayhead()?.sec ?? 0;
+    const wasPlaying = state.status === 'playing' || state.status === 'buffering';
+    localHandoffInFlight = true;
+    try {
+      await startAt(state.index, { startSec: resumeSec, autoplay: wasPlaying });
+    } finally {
+      localHandoffInFlight = false;
+    }
+    return;
+  }
+
   if (usePlayer.getState().nativeActive) return;
 
   const wantTap = desktopTapWanted(settings);
@@ -325,6 +385,7 @@ export async function syncDesktopOutputRoute(explicitSettings?: AudioSettings): 
     if (graph?.tap?.isEnabled) {
       await graph.tap.setRouting(false);
     }
+    syncAutomix(settings);
     return;
   }
 
@@ -332,8 +393,14 @@ export async function syncDesktopOutputRoute(explicitSettings?: AudioSettings): 
   const g = await ensureAutomix();
   if (!g) return;
   void g.ctx.resume();
-  applyCurrentDsp(g);
+  applyCurrentDsp(g, settings);
+  applyVolumes();
   await g.tap?.setRouting(true);
+  if (bypass) {
+    g.dj.stop();
+  } else {
+    syncAutomix(settings);
+  }
 }
 
 export function handleNativeTrackEnded(trackId: string): void {
@@ -348,18 +415,28 @@ export function syncNativePlayheadFromSnapshot(snap: NativePlaybackSnapshot): vo
   if (!state.nativeActive || !snap.active) return;
   usePlayer.setState({
     bitPerfectStatus: snap.bitPerfect,
+    desktopOutputMode: snap.settings.outputMode,
     nativePlayhead: {
       positionSec: snap.positionSec,
       durationSec: snap.durationSec,
-      playbackRate: snap.playbackRate,
+      playbackRate: isBitPerfectBypassActive(snap.settings, snap.bitPerfect) ? 1 : snap.playbackRate,
       updatedAtMs: performance.now(),
       paused: snap.status !== 'playing',
     },
   });
 }
 
-function applyCurrentDsp(g: AutomixGraph | null) {
+function applyCurrentDsp(g: AutomixGraph | null, explicitSettings?: AudioSettings | null) {
   if (!g) return;
+  if (bitPerfectBypassActive(explicitSettings)) {
+    g.eq.applyDsp({
+      eq: DEFAULT_EQ_CONFIG,
+      balance: 0,
+      spatialAudio: false,
+      loudnessNormalization: false,
+    });
+    return;
+  }
   const s = usePlayer.getState();
   g.eq.applyDsp({
     eq: s.eq,
@@ -369,9 +446,11 @@ function applyCurrentDsp(g: AutomixGraph | null) {
   });
 }
 
-function needsWebAudioGraph(): boolean {
+function needsWebAudioGraph(explicitSettings?: AudioSettings | null): boolean {
+  const tap = desktopTapWanted(explicitSettings);
+  if (bitPerfectBypassActive(explicitSettings)) return tap;
   const s = usePlayer.getState();
-  return s.automix || s.eq.enabled || s.spatialAudio || Math.abs(s.balance) > 0.01 || desktopTapWanted();
+  return s.automix || s.eq.enabled || s.spatialAudio || Math.abs(s.balance) > 0.01 || tap;
 }
 export function getMixBeat(): { phase: number | null } | null {
   return graph?.dj.mixBeat() ?? null;
@@ -415,19 +494,20 @@ function getDecks(): Promise<Deck[]> {
 }
 
 function applyVolumes() {
-  const { volume, muted } = usePlayer.getState();
-  const level = muted ? 0 : Math.min(1, Math.max(0, volume));
+  const { volume, muted, bitPerfectStatus } = usePlayer.getState();
+  const bypassVolume = bitPerfectStatus?.active === true;
+  const level = bypassVolume ? 1 : muted ? 0 : Math.min(1, Math.max(0, volume));
   if (graph) {
     // Routed through Web Audio: the elements stay at 1 and the graph carries volume and the fade.
     const now = graph.ctx.currentTime;
     graph.master.gain.setTargetAtTime(level, now, 0.015);
     (decks ?? []).forEach((deck, n) => {
       deck.audio.volume = 1;
-      graph!.decks[n]!.fader.gain.setTargetAtTime(deck.gain, now, 0.015);
+      graph!.decks[n]!.fader.gain.setTargetAtTime(bypassVolume ? 1 : deck.gain, now, 0.015);
     });
     return;
   }
-  for (const deck of decks ?? []) deck.audio.volume = level * deck.gain;
+  for (const deck of decks ?? []) deck.audio.volume = level * (bypassVolume ? 1 : deck.gain);
 }
 
 // ---- AutoMix (playback/automix): the two decks routed through Web Audio, mixed like a DJ ----
@@ -556,23 +636,27 @@ function automixHandoff() {
   intent();
 }
 
-function syncAutomix() {
-  if (!needsWebAudioGraph()) {
+function syncAutomix(explicitSettings?: AudioSettings | null) {
+  const bypass = bitPerfectBypassActive(explicitSettings);
+  if (bypass) {
+    cancelCrossfade();
+  }
+  if (!needsWebAudioGraph(explicitSettings)) {
     graph?.dj.stop();
-    applyCurrentDsp(graph);
+    applyCurrentDsp(graph, explicitSettings);
     return;
   }
   void ensureAutomix().then((g) => {
     const state = usePlayer.getState();
     if (!g) return;
     void g.ctx.resume();
-    applyCurrentDsp(g);
-    if (desktopTapWanted() && !state.nativeActive) {
+    applyCurrentDsp(g, explicitSettings);
+    if (desktopTapWanted(explicitSettings) && !state.nativeActive) {
       void g.tap?.setRouting(true);
     } else if (g.tap?.isEnabled) {
       void g.tap.setRouting(false);
     }
-    if (state.automix) {
+    if (state.automix && !bitPerfectBypassActive(explicitSettings)) {
       g.dj.transitionBars = state.automixBars;
       g.dj.start();
     } else {
@@ -643,6 +727,7 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
   mixing: false,
   sleepTimerEndMs: null,
   sleepAfterTrack: false,
+  desktopOutputMode: 'shared',
   bitPerfectStatus: null,
   nativeActive: false,
   nativePlayhead: null,
@@ -759,6 +844,7 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
       const head = getPlayhead();
       const currentSec = head?.sec ?? nativePlayhead?.positionSec ?? 0;
       const durSec = nativePlayhead?.durationSec ?? nowPlaying.durationSec;
+      const activeRate = bitPerfectBypassActive() ? 1 : get().playbackRate;
       if (status === 'playing') {
         void desktopApi.audioPause().catch(() => {});
         set({
@@ -766,7 +852,7 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
           nativePlayhead: {
             positionSec: currentSec,
             durationSec: durSec,
-            playbackRate: get().playbackRate,
+            playbackRate: activeRate,
             updatedAtMs: performance.now(),
             paused: true,
           },
@@ -778,7 +864,7 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
           nativePlayhead: {
             positionSec: currentSec,
             durationSec: durSec,
-            playbackRate: get().playbackRate,
+            playbackRate: activeRate,
             updatedAtMs: performance.now(),
             paused: false,
           },
@@ -820,7 +906,7 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
         nativePlayhead: {
           positionSec: clamped,
           durationSec: dur,
-          playbackRate: get().playbackRate,
+          playbackRate: bitPerfectBypassActive() ? 1 : get().playbackRate,
           updatedAtMs: performance.now(),
           paused: status !== 'playing',
         },
@@ -878,6 +964,7 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
   },
 
   setVolume(volume) {
+    if (get().bitPerfectStatus?.active) return;
     const nextVol = Math.min(1, Math.max(0, volume));
     set({ volume: nextVol, muted: false });
     applyVolumes();
@@ -888,6 +975,7 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
   },
 
   toggleMute() {
+    if (get().bitPerfectStatus?.active) return;
     const nextMuted = !get().muted;
     set({ muted: nextMuted });
     applyVolumes();
@@ -926,12 +1014,10 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
   },
 
   setPlaybackRate(rate) {
+    if (bitPerfectBypassActive()) return;
     const clamped = Math.min(2, Math.max(0.5, Number(rate.toFixed(2))));
     set({ playbackRate: clamped });
-    for (const d of decks ?? []) {
-      d.audio.playbackRate = clamped;
-      d.audio.preservesPitch = true;
-    }
+    applyEffectivePlaybackRate();
     saveSettings(get());
     if (isTauriDesktop()) {
       void desktopApi
@@ -970,7 +1056,10 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
         .then((snap) => desktopApi.audioUpdateSettings({ ...snap.settings, eq: nextEq }))
         .then((updated) => {
           queryClient.setQueryData(['desktop', 'audio', 'snapshot'], updated);
-          set({ bitPerfectStatus: updated.bitPerfect });
+          set({
+            bitPerfectStatus: updated.bitPerfect,
+            desktopOutputMode: updated.settings.outputMode,
+          });
         })
         .catch(() => {});
     }
@@ -1074,7 +1163,7 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
   try {
     const settings = await resolveDesktopAudioSettings();
 
-    if (isTauriDesktop() && entry.track.videoId.startsWith('local:') && settings?.outputMode !== 'shared') {
+    if (isTauriDesktop() && entry.track.videoId.startsWith('local:') && isExclusiveOutputMode(settings?.outputMode)) {
       let localMeta = localTrackMeta.get(entry.track.videoId);
       if (!localMeta) {
         const scanned = await desktopApi.localListTracks().catch(() => []);
@@ -1099,15 +1188,19 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
         if (!autoplay) await desktopApi.audioPause().catch(() => {});
         queryClient.setQueryData(['desktop', 'audio', 'snapshot'], played);
         const dur = played.durationSec || entry.track.durationSec || 0;
+        const effectiveRate = isBitPerfectBypassActive(played.settings, played.bitPerfect)
+          ? 1
+          : played.playbackRate;
         usePlayer.setState({
           nativeActive: true,
           nativePlayhead: {
             positionSec: startSec,
             durationSec: dur,
-            playbackRate: played.playbackRate,
+            playbackRate: effectiveRate,
             updatedAtMs: performance.now(),
             paused: !autoplay,
           },
+          desktopOutputMode: played.settings.outputMode,
           bitPerfectStatus: played.bitPerfect,
           nowPlaying: {
             ...hintOf(entry.track),
@@ -1126,6 +1219,7 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
           status: autoplay ? 'playing' : 'paused',
           error: null,
         });
+        applyVolumes();
         updateMediaSession(usePlayer.getState().nowPlaying);
         afterTrackStarted();
         return;
@@ -1134,7 +1228,11 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
 
     if (usePlayer.getState().nativeActive) {
       await desktopApi.audioStop().catch(() => {});
-      usePlayer.setState({ nativeActive: false, nativePlayhead: null });
+      usePlayer.setState({
+        nativeActive: false,
+        nativePlayhead: null,
+        bitPerfectStatus: null,
+      });
     }
 
     const all = await getDecks();
@@ -1142,9 +1240,7 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
     all[1 - active]!.engine.stop().catch(() => {});
     deck.gain = 1;
     applyVolumes();
-    const rate = usePlayer.getState().playbackRate;
-    deck.audio.playbackRate = rate;
-    deck.audio.preservesPitch = true;
+    applyEffectivePlaybackRate(settings);
 
     graph?.tap?.flush();
     if (desktopTapWanted(settings)) {
@@ -1164,6 +1260,7 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
     if (localMediaUrl) {
       await deck.engine.stop().catch(() => {});
       deck.audio.src = localMediaUrl;
+      applyEffectivePlaybackRate(settings);
       if (startSec > 0) deck.audio.currentTime = startSec;
       if (autoplay) await deck.audio.play();
       if (token !== loadToken) return;
@@ -1179,18 +1276,17 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
       });
       updateMediaSession(usePlayer.getState().nowPlaying);
       afterTrackStarted();
-      syncAutomix();
+      syncAutomix(settings);
       return;
     }
 
     const track = await deck.engine.load(entry.track.videoId, { startSec, autoplay });
     if (token !== loadToken) return;
-    deck.audio.playbackRate = usePlayer.getState().playbackRate;
-    deck.audio.preservesPitch = true;
+    applyEffectivePlaybackRate(settings);
     applyTrack(track, entry.track);
     if (!autoplay) usePlayer.setState({ status: 'paused' });
     afterTrackStarted();
-    syncAutomix();
+    syncAutomix(settings);
   } catch (error) {
     if (token !== loadToken || (error instanceof Error && error.name === 'SupersededError')) return;
     const message = error instanceof Error ? error.message : String(error);
@@ -1396,7 +1492,16 @@ function cancelCrossfade() {
 /** Called as the track in front plays: within the crossfade length of its end, start the next one underneath. */
 function maybeCrossfade() {
   const state = usePlayer.getState();
-  if (!decks || fade || state.automix || !state.crossfadeSec || state.status !== 'playing') return;
+  if (
+    !decks ||
+    fade ||
+    state.automix ||
+    !state.crossfadeSec ||
+    state.status !== 'playing' ||
+    bitPerfectBypassActive()
+  ) {
+    return;
+  }
   const front = decks[active]!;
   const remaining = front.audio.duration - front.audio.currentTime;
   if (!Number.isFinite(remaining) || remaining > state.crossfadeSec || remaining < 1) return;

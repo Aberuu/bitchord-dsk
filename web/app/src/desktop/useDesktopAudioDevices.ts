@@ -27,7 +27,10 @@ async function commitUpdatedSnapshot(
     return;
   }
   queryClient.setQueryData(DESKTOP_AUDIO_SNAPSHOT_KEY, updated);
-  usePlayer.setState({ bitPerfectStatus: updated.bitPerfect });
+  usePlayer.setState({
+    bitPerfectStatus: updated.bitPerfect,
+    desktopOutputMode: updated.settings.outputMode,
+  });
   await syncDesktopOutputRoute(updated.settings);
 }
 

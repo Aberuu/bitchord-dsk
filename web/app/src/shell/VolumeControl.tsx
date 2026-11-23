@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { VolumeIcon } from '@/components/icons/Transport';
+import { useBitPerfectUi } from '@/desktop/useBitPerfectUi';
 import { usePlayer } from '@/state/player';
 import { nextVolumeFromWheel } from './wheelVolume';
 
@@ -53,7 +54,8 @@ function useVolumeWheel(onStep: () => void) {
     const el = ref.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
-      const { volume, setVolume } = usePlayer.getState();
+      const { volume, setVolume, bitPerfectStatus } = usePlayer.getState();
+      if (bitPerfectStatus?.active) return;
       const next = nextVolumeFromWheel(volume, e.deltaY);
       if (next === volume) return;
       e.preventDefault();
@@ -71,32 +73,43 @@ export function VolumeControl({ open, onOpen, className, iconSize = 20 }: Volume
   const muted = usePlayer((s) => s.muted);
   const setVolume = usePlayer((s) => s.setVolume);
   const toggleMute = usePlayer((s) => s.toggleMute);
+  const { lockVolume } = useBitPerfectUi();
   const level = muted ? 0 : volume;
+  const displayLevel = lockVolume ? 1 : level;
   const wheelRef = useVolumeWheel(onOpen);
   return (
     <span ref={wheelRef}>
       <input
-        className={slider}
+        className={lockVolume ? `${slider} opacity-40 cursor-not-allowed` : slider}
         data-open={open || undefined}
         type="range"
         min={0}
         max={1}
         step={0.01}
-        value={level}
-        aria-label="Volume"
+        value={displayLevel}
+        disabled={lockVolume}
+        aria-label={lockVolume ? 'Volume bypassed in Bit-Perfect mode' : 'Volume'}
+        title={lockVolume ? 'Volume is bypassed in Bit-Perfect (WASAPI Exclusive) mode' : undefined}
         tabIndex={open ? 0 : -1}
-        style={{ '--fill': `${level * 100}%` } as React.CSSProperties}
-        onChange={(e) => setVolume(Number(e.currentTarget.value))}
+        style={{ '--fill': `${displayLevel * 100}%` } as React.CSSProperties}
+        onChange={(e) => {
+          if (!lockVolume) setVolume(Number(e.currentTarget.value));
+        }}
       />
       <button
-        className={className}
-        aria-label={muted ? 'Unmute' : 'Mute'}
-        aria-pressed={muted}
-        onClick={toggleMute}
+        className={lockVolume ? `${className} opacity-40 cursor-not-allowed` : className}
+        aria-label={lockVolume ? 'Volume bypassed in Bit-Perfect mode' : muted ? 'Unmute' : 'Mute'}
+        aria-pressed={lockVolume ? false : muted}
+        aria-disabled={lockVolume || undefined}
+        disabled={lockVolume}
+        title={lockVolume ? 'Volume is bypassed in Bit-Perfect (WASAPI Exclusive) mode' : undefined}
+        onClick={() => {
+          if (!lockVolume) toggleMute();
+        }}
         onPointerEnter={onOpen}
         onFocus={onOpen}
       >
-        <VolumeIcon level={level} size={iconSize} />
+        <VolumeIcon level={displayLevel} size={iconSize} />
       </button>
     </span>
   );

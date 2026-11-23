@@ -12,7 +12,9 @@ import {
   VolumeX,
   X,
 } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { BitPerfectConfirmBanner } from '@/desktop/BitPerfectBypass';
+import { isExclusiveOutputMode } from '@/desktop/bitPerfectMode';
 import type { AudioDeviceKind, OutputMode } from '@/desktop/tauriBridge';
 import { useAudioPipeline } from '@/desktop/useAudioPipeline';
 import { useDesktopAudioDevices } from '@/desktop/useDesktopAudioDevices';
@@ -52,18 +54,23 @@ function AudioOutputModalContent() {
     live: true,
   });
   const closeRef = useRef<HTMLButtonElement>(null);
+  const [confirmExclusiveOpen, setConfirmExclusiveOpen] = useState(false);
 
   useEffect(() => {
     closeRef.current?.focus({ preventScroll: true });
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key === 'Escape') {
         ev.stopPropagation();
-        setOpen(false);
+        if (confirmExclusiveOpen) {
+          setConfirmExclusiveOpen(false);
+        } else {
+          setOpen(false);
+        }
       }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [setOpen]);
+  }, [setOpen, confirmExclusiveOpen]);
 
   const snap = snapQuery.data;
   const settings = snap?.settings;
@@ -72,6 +79,8 @@ function AudioOutputModalContent() {
   const activeDeviceId = settings?.deviceId ?? null;
   const activeMode: OutputMode = settings?.outputMode ?? 'shared';
   const fallbackReason = snap?.bitPerfect.fallbackReason ?? null;
+  const bitPerfectActive = desktop && snap?.bitPerfect.active === true;
+  const bitPerfectExact = bitPerfectActive && snap?.bitPerfect.exact === true;
 
   const selectDevice = (deviceId: string | null) => {
     if (!settings || deviceId === activeDeviceId) return;
@@ -80,11 +89,22 @@ function AudioOutputModalContent() {
 
   const toggleExclusive = () => {
     if (!settings) return;
-    const nextMode: OutputMode = activeMode === 'wasapi_exclusive' ? 'shared' : 'wasapi_exclusive';
-    updateAudio.mutate({ ...settings, outputMode: nextMode });
+    if (isExclusiveOutputMode(activeMode)) {
+      setConfirmExclusiveOpen(false);
+      updateAudio.mutate({ ...settings, outputMode: 'shared' });
+      return;
+    }
+    setConfirmExclusiveOpen((open) => !open);
+  };
+
+  const confirmEnableExclusive = () => {
+    if (!settings) return;
+    setConfirmExclusiveOpen(false);
+    updateAudio.mutate({ ...settings, outputMode: 'wasapi_exclusive' });
   };
 
   const level = muted ? 0 : volume;
+  const displayLevel = bitPerfectActive ? 1 : level;
   const refreshing = devicesQuery.isFetching || snapQuery.isFetching;
 
   return (
@@ -196,54 +216,94 @@ function AudioOutputModalContent() {
           </div>
 
           {desktop && settings && (
-            <button
-              type="button"
-              onClick={toggleExclusive}
-              className="flex w-full items-center justify-between gap-3 rounded-[16px] bg-white/7 px-3.5 py-3 text-start transition-colors hover:bg-white/11"
-            >
-              <span className="flex min-w-0 flex-col">
-                <span className="type-body-emphasized text-white">WASAPI Exclusive (Bit-Perfect)</span>
-                <span className="truncate type-callout text-white/60">
-                  {fallbackReason
-                    ? fallbackReason
-                    : activeMode === 'wasapi_exclusive'
-                      ? 'Bypassing Windows mixer on active device'
-                      : 'Bypass Windows mixer on compatible DACs'}
-                </span>
-              </span>
-              <span
-                className={`rounded-pill px-2.5 py-1 type-caption-2 uppercase ${
-                  activeMode === 'wasapi_exclusive'
-                    ? 'bg-green/20 text-green'
-                    : 'bg-white/10 text-white/65'
-                }`}
+            <>
+              <button
+                type="button"
+                onClick={toggleExclusive}
+                aria-expanded={confirmExclusiveOpen}
+                className="flex w-full items-center justify-between gap-3 rounded-[16px] bg-white/7 px-3.5 py-3 text-start transition-colors hover:bg-white/11"
               >
-                {activeMode === 'wasapi_exclusive' ? 'On' : 'Off'}
-              </span>
-            </button>
+                <span className="flex min-w-0 flex-col">
+                  <span className="type-body-emphasized text-white">WASAPI Exclusive (Bit-Perfect)</span>
+                  <span className="truncate type-callout text-white/60">
+                    {fallbackReason
+                      ? fallbackReason
+                      : bitPerfectActive
+                        ? bitPerfectExact
+                          ? `Bit-exact · ${(snap.bitPerfect.sampleRateHz / 1000).toFixed(1).replace(/\.0$/, '')} kHz / ${snap.bitPerfect.outputBits}-bit`
+                          : `Active (${snap.bitPerfect.driver ?? 'WASAPI Exclusive'} · ${(snap.bitPerfect.sampleRateHz / 1000).toFixed(1).replace(/\.0$/, '')} kHz / ${snap.bitPerfect.outputBits}-bit)`
+                        : isExclusiveOutputMode(activeMode)
+                          ? 'Armed for active playback on compatible DACs'
+                          : 'Bypass Windows mixer on compatible DACs'}
+                  </span>
+                </span>
+                <span
+                  className={`rounded-pill px-2.5 py-1 type-caption-2 uppercase ${
+                    isExclusiveOutputMode(activeMode)
+                      ? 'bg-green/20 text-green'
+                      : 'bg-white/10 text-white/65'
+                  }`}
+                >
+                  {bitPerfectExact ? 'Exact' : isExclusiveOutputMode(activeMode) ? 'On' : 'Off'}
+                </span>
+              </button>
+
+              {confirmExclusiveOpen && (
+                <BitPerfectConfirmBanner
+                  variant="modal"
+                  onConfirm={confirmEnableExclusive}
+                  onCancel={() => setConfirmExclusiveOpen(false)}
+                />
+              )}
+            </>
           )}
 
-          <div className="flex items-center gap-3 rounded-[16px] bg-white/7 px-3.5 py-3.5">
+          <div
+            className={`flex items-center gap-3 rounded-[16px] bg-white/7 px-3.5 py-3.5 ${
+              bitPerfectActive ? 'opacity-45' : ''
+            }`}
+            aria-disabled={bitPerfectActive || undefined}
+          >
             <button
               type="button"
-              onClick={toggleMute}
-              aria-label={muted ? 'Unmute' : 'Mute'}
-              className="grid size-7 flex-none place-items-center rounded-full text-white/75 transition-colors hover:text-white"
+              disabled={bitPerfectActive}
+              onClick={() => {
+                if (!bitPerfectActive) toggleMute();
+              }}
+              aria-label={bitPerfectActive ? 'Volume bypassed in Bit-Perfect mode' : muted ? 'Unmute' : 'Mute'}
+              title={bitPerfectActive ? 'Volume is bypassed in Bit-Perfect (WASAPI Exclusive) mode' : undefined}
+              className="grid size-7 flex-none place-items-center rounded-full text-white/75 transition-colors hover:text-white disabled:cursor-not-allowed disabled:hover:text-white/75"
             >
-              {muted || level === 0 ? <VolumeX size={17} aria-hidden="true" /> : <Volume2 size={17} aria-hidden="true" />}
+              {bitPerfectActive ? (
+                <Volume2 size={17} aria-hidden="true" />
+              ) : muted || level === 0 ? (
+                <VolumeX size={17} aria-hidden="true" />
+              ) : (
+                <Volume2 size={17} aria-hidden="true" />
+              )}
             </button>
             <input
               type="range"
               min={0}
               max={1}
               step={0.01}
-              value={level}
-              aria-label="Output volume"
-              onChange={(e) => setVolume(Number(e.currentTarget.value))}
-              className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-white/22 accent-white"
+              value={displayLevel}
+              disabled={bitPerfectActive}
+              aria-label={bitPerfectActive ? 'Output volume bypassed in Bit-Perfect mode' : 'Output volume'}
+              title={bitPerfectActive ? 'Volume is bypassed in Bit-Perfect (WASAPI Exclusive) mode' : undefined}
+              onChange={(e) => {
+                if (!bitPerfectActive) setVolume(Number(e.currentTarget.value));
+              }}
+              className={`h-1.5 flex-1 appearance-none rounded-full bg-white/22 accent-white ${
+                bitPerfectActive ? 'cursor-not-allowed' : 'cursor-pointer'
+              }`}
             />
-            <span className="w-9 text-right type-callout tabular-nums text-white/70">
-              {Math.round(level * 100)}%
+            <span
+              className={`text-right type-callout tabular-nums text-white/70 ${
+                bitPerfectActive ? 'w-16' : 'w-9'
+              }`}
+            >
+              {bitPerfectActive ? 'Bypassed' : `${Math.round(displayLevel * 100)}%`}
             </span>
           </div>
 

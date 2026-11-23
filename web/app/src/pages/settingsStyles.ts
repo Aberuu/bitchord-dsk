@@ -40,7 +40,7 @@ export const settingsUi = {
   inlineLink: 'text-key',
 
   switch: [
-    'relative h-[26px] w-[46px] flex-none cursor-pointer appearance-none rounded-pill bg-quaternary transition-[background-color] duration-200 checked:bg-green',
+    'relative h-[26px] w-[46px] flex-none cursor-pointer appearance-none rounded-pill bg-quaternary transition-[background-color] duration-200 checked:bg-green disabled:cursor-not-allowed',
     'after:absolute after:top-[3px] after:left-[3px] after:size-[20px] after:rounded-full after:bg-white after:shadow-[0_1px_3px_rgb(0_0_0/0.35)] after:transition-[translate] after:duration-200 checked:after:translate-x-[20px]',
   ].join(' '),
   input: field,

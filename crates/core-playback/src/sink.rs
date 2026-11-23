@@ -66,10 +66,16 @@ pub fn asio_available() -> bool {
     cfg!(feature = "asio")
 }
 
-pub fn classify_endpoint(
+fn is_usb_bus_hint(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("usb") || lower.starts_with("uac")
+}
+
+pub fn classify_endpoint_with_topology(
     name: &str,
     interface_name: &str,
     enumerator: &str,
+    topology_id: Option<&str>,
     form_factor: Option<u32>,
 ) -> AudioDeviceKind {
     let lower_name = name.to_ascii_lowercase();
@@ -85,8 +91,9 @@ pub fn classify_endpoint(
         return AudioDeviceKind::Bluetooth;
     }
 
-    if lower_enum == "usb"
-        || lower_iface.contains("usb audio")
+    if is_usb_bus_hint(&lower_enum)
+        || is_usb_bus_hint(&lower_iface)
+        || topology_id.is_some_and(is_usb_bus_hint)
         || lower_name.contains("usb dac")
         || lower_name.contains("usb audio")
     {
@@ -121,6 +128,15 @@ pub fn classify_endpoint(
     AudioDeviceKind::Other
 }
 
+pub fn classify_endpoint(
+    name: &str,
+    interface_name: &str,
+    enumerator: &str,
+    form_factor: Option<u32>,
+) -> AudioDeviceKind {
+    classify_endpoint_with_topology(name, interface_name, enumerator, None, form_factor)
+}
+
 fn cpal_output_sample_rates() -> HashMap<String, u32> {
     let mut rates = HashMap::new();
     let host = cpal::default_host();
@@ -141,13 +157,13 @@ fn cpal_output_sample_rates() -> HashMap<String, u32> {
 #[cfg(windows)]
 fn read_mmdevice_metadata(
     mm_dev: &windows::Win32::Media::Audio::IMMDevice,
-) -> (Option<String>, String, Option<u32>) {
+) -> (Option<String>, String, Option<String>, Option<u32>) {
     use windows::Win32::Devices::FunctionDiscovery::PKEY_DeviceInterface_FriendlyName;
-    use windows::Win32::Media::Audio::PKEY_AudioEndpoint_FormFactor;
+    use windows::Win32::Media::Audio::{IDeviceTopology, PKEY_AudioEndpoint_FormFactor};
     use windows::Win32::System::Com::StructuredStorage::{
         PropVariantClear, PropVariantToStringAlloc, PropVariantToUInt32,
     };
-    use windows::Win32::System::Com::{CoTaskMemFree, STGM_READ};
+    use windows::Win32::System::Com::{CoTaskMemFree, CLSCTX_ALL, STGM_READ};
     use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
 
     // DEVPKEY_Device_EnumeratorName ({a45c254e-df1c-4efd-8020-67d146a850e0}, pid 24).
@@ -156,8 +172,21 @@ fn read_mmdevice_metadata(
         pid: 24,
     };
 
+    let topology_id = unsafe {
+        mm_dev
+            .Activate::<IDeviceTopology>(CLSCTX_ALL, None)
+            .ok()
+            .and_then(|topo| topo.GetConnector(0).ok())
+            .and_then(|conn| conn.GetDeviceIdConnectedTo().ok())
+            .and_then(|pw| {
+                let s = pw.to_string().unwrap_or_default();
+                CoTaskMemFree(Some(pw.0.cast()));
+                (!s.is_empty()).then_some(s)
+            })
+    };
+
     let Ok(store) = (unsafe { mm_dev.OpenPropertyStore(STGM_READ) }) else {
-        return (None, String::new(), None);
+        return (None, String::new(), topology_id, None);
     };
 
     let read_string = |key: &PROPERTYKEY| -> String {
@@ -193,8 +222,27 @@ fn read_mmdevice_metadata(
     (
         (!interface_name.is_empty()).then_some(interface_name),
         enumerator,
+        topology_id,
         form_factor,
     )
+}
+
+#[cfg(windows)]
+fn probe_max_exclusive_sample_rate(client: &wasapi::AudioClient) -> Option<u32> {
+    use wasapi::{SampleType, ShareMode, WaveFormat};
+
+    const RATES: &[u32] = &[
+        768_000, 705_600, 384_000, 352_800, 192_000, 176_400, 96_000, 88_200, 48_000, 44_100,
+    ];
+    for &rate in RATES {
+        for &(valid, container) in &[(32usize, 32usize), (24, 32), (24, 24), (16, 16)] {
+            let fmt = WaveFormat::new(container, valid, &SampleType::Int, rate as usize, 2, None);
+            if matches!(client.is_supported(&fmt, &ShareMode::Exclusive), Ok(None)) {
+                return Some(rate);
+            }
+        }
+    }
+    None
 }
 
 #[cfg(windows)]
@@ -259,6 +307,22 @@ fn list_windows_wasapi_devices(cpal_rates: &HashMap<String, u32>) -> Result<Vec<
             })
         });
 
+    let wasapi_devices = wasapi::DeviceCollection::new(&wasapi::Direction::Render)
+        .ok()
+        .map(|col| {
+            let mut map = HashMap::new();
+            let total = col.get_nbr_devices().unwrap_or(0);
+            for i in 0..total {
+                if let Ok(wdev) = col.get_device_at_index(i) {
+                    if let Ok(id) = wdev.get_id() {
+                        map.insert(id, wdev);
+                    }
+                }
+            }
+            map
+        })
+        .unwrap_or_default();
+
     let collection = unsafe { enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)? };
     let count = unsafe { collection.GetCount()? };
     let mut devices = Vec::with_capacity(count as usize);
@@ -299,17 +363,24 @@ fn list_windows_wasapi_devices(cpal_rates: &HashMap<String, u32>) -> Result<Vec<
             continue;
         }
 
-        let (interface_name, enumerator_name, form_factor) = read_mmdevice_metadata(&dev);
-        let kind = classify_endpoint(
+        let (interface_name, enumerator_name, topology_id, form_factor) =
+            read_mmdevice_metadata(&dev);
+        let kind = classify_endpoint_with_topology(
             &name,
             interface_name.as_deref().unwrap_or(""),
             &enumerator_name,
+            topology_id.as_deref(),
             form_factor,
         );
-        let max_sr = cpal_rates
-            .get(&name)
-            .copied()
-            .or_else(|| mmdevice_mix_sample_rate(&dev))
+        let exclusive_max_sr = wasapi_devices
+            .get(&mm_id)
+            .and_then(|wdev| wdev.get_iaudioclient().ok())
+            .and_then(|client| probe_max_exclusive_sample_rate(&client));
+        let max_sr = exclusive_max_sr
+            .into_iter()
+            .chain(cpal_rates.get(&name).copied())
+            .chain(mmdevice_mix_sample_rate(&dev))
+            .max()
             .unwrap_or(48_000);
 
         devices.push(AudioDeviceInfo {
@@ -317,7 +388,7 @@ fn list_windows_wasapi_devices(cpal_rates: &HashMap<String, u32>) -> Result<Vec<
             is_default: default_id.as_deref() == Some(mm_id.as_str()),
             name,
             backend: "WASAPI".into(),
-            supports_exclusive: true,
+            supports_exclusive: exclusive_max_sr.is_some(),
             max_sample_rate_hz: max_sr,
             kind,
             is_usb_dac: kind == AudioDeviceKind::UsbDac,
@@ -528,9 +599,14 @@ pub fn probe_wasapi_exclusive_format(
         }
     }
 
-    // DAC rejected the source sample rate; fall back to the highest standard rate it accepts.
-    for &rate in &[192_000u32, 96_000, 48_000, 44_100] {
-        for &(valid, container) in &[(24usize, 32usize), (24, 24), (16, 16)] {
+    // DAC rejected the source sample rate; stay in the same clock family before cross-family resampling.
+    let fallback_rates: &[u32] = if source_rate_hz % 44_100 == 0 {
+        &[352_800, 176_400, 88_200, 44_100, 384_000, 192_000, 96_000, 48_000]
+    } else {
+        &[384_000, 192_000, 96_000, 48_000, 352_800, 176_400, 88_200, 44_100]
+    };
+    for &rate in fallback_rates {
+        for &(valid, container) in &[(32usize, 32usize), (24, 32), (24, 24), (16, 16)] {
             let fmt =
                 WaveFormat::new(container, valid, &SampleType::Int, rate as usize, channels, None);
             if matches!(client.is_supported(&fmt, &ShareMode::Exclusive), Ok(None)) {
@@ -570,6 +646,20 @@ mod tests {
         );
         assert_eq!(
             classify_endpoint("Speakers (FiiO KA11)", "FiiO KA11", "USB", Some(1)),
+            AudioDeviceKind::UsbDac
+        );
+        assert_eq!(
+            classify_endpoint("Speakers (SNOWSKY Tiny B)", "SNOWSKY Tiny B", "TUSBAUDIO_ENUM", Some(1)),
+            AudioDeviceKind::UsbDac
+        );
+        assert_eq!(
+            classify_endpoint_with_topology(
+                "Speakers (External DAC)",
+                "Generic Endpoint",
+                "SWD",
+                Some(r"{2}.\\?\tusbaudio_enum#vid_2972&pid_0149&ks#000000000000"),
+                Some(1),
+            ),
             AudioDeviceKind::UsbDac
         );
         assert_eq!(
