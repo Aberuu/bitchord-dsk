@@ -1,6 +1,7 @@
 import { Download, FileMusic, ListMusic, Settings, SlidersHorizontal } from 'lucide-react';
 import { useEffect } from 'react';
 import { PrefetchLink, PrefetchNavLink } from '@/components/PrefetchLink';
+import { DeveloperWatermark } from '@/components/DeveloperWatermark';
 import { LogoMark } from '@/components/icons/LogoMark';
 import { isTauriDesktop } from '@/desktop/tauriBridge';
 import {
@@ -191,7 +192,7 @@ export function Sidebar() {
           {signedIn && <LibraryNav onNavigate={close} />}
           {spotifySignedIn && <SpotifyNav onNavigate={close} />}
         </div>
-        <div className="flex flex-col gap-2 border-t border-divider/60 pt-3 pr-3 pb-4 pl-5">
+        <div className="flex flex-col gap-2 border-t border-divider/60 pt-3 pr-3 pb-3 pl-5">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0 flex-1">
               <AccountButton />
@@ -206,6 +207,7 @@ export function Sidebar() {
               <Settings size={17} strokeWidth={1.9} aria-hidden="true" />
             </PrefetchNavLink>
           </div>
+          <DeveloperWatermark variant="sidebar" />
         </div>
       </nav>
       {drawerOpen && (

@@ -60,7 +60,7 @@ export function LyricsSettings({ onClose }: { onClose: () => void }) {
           </button>
         </header>
 
-        <div className="overflow-y-auto px-5 pb-5">
+        <div className="overflow-y-auto px-5 pb-5 scrollbar-compact">
           <h3 className={section}>Providers</h3>
           <p className={note}>Asked all at once; the first in this order with word-timed lyrics wins.</p>
           <ol className={group}>

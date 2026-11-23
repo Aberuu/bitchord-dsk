@@ -26,6 +26,15 @@ export interface UpdateCheckResult {
   notes: string | null;
 }
 
+export interface WatermarkStatus {
+  credit: string;
+  author: string;
+  githubProfileUrl: string;
+  githubRepoUrl: string;
+  formatted: string;
+  integrityValid: boolean;
+}
+
 export interface SmtcMetadataPayload {
   title: string;
   artist?: string | null;
@@ -292,6 +301,7 @@ export const desktopApi = {
   signOutYt: () => invoke<void>('sign_out_yt'),
   setMinimizeToTray: (enabled: boolean) => invoke<boolean>('set_minimize_to_tray', { enabled }),
   checkForUpdates: () => invoke<UpdateCheckResult>('check_for_updates'),
+  watermarkStatus: () => invoke<WatermarkStatus>('get_watermark_status'),
 
   smtcUpdateMetadata: (meta: SmtcMetadataPayload) => invoke<void>('smtc_update_metadata', { meta }),
   smtcUpdatePlayback: (playback: SmtcPlaybackPayload) => invoke<void>('smtc_update_playback', { playback }),

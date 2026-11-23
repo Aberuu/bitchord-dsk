@@ -1,5 +1,6 @@
 pub mod spotify;
 pub mod vault;
+pub mod watermark;
 pub mod youtube;
 
 pub use spotify::SpotifyService;

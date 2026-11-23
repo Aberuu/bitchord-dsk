@@ -130,7 +130,7 @@ export function Menu({ anchor, point, returnFocusTo, placement = 'below-end', on
         aria-label={label}
         onContextMenu={(e) => e.preventDefault()}
       >
-        <div ref={scroller} className="max-h-[inherit] overflow-y-auto p-1.5 [scrollbar-width:thin]">
+        <div ref={scroller} className="max-h-[inherit] overflow-y-auto p-1.5 scrollbar-compact">
           {children}
         </div>
       </div>

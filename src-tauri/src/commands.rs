@@ -651,6 +651,16 @@ pub fn replay_save_file(file_name: String, base64_bytes: String) -> Result<Strin
 }
 
 #[tauri::command]
+pub fn get_watermark_status() -> Result<core_auth::watermark::EmbeddedWatermarkStatus, String> {
+    let status = core_auth::watermark::verify_embedded_watermark();
+    if status.integrity_valid {
+        Ok(status)
+    } else {
+        Err("Embedded watermark integrity check failed".to_string())
+    }
+}
+
+#[tauri::command]
 pub fn open_devtools_window(app: AppHandle) {
     #[cfg(debug_assertions)]
     {

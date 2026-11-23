@@ -140,6 +140,10 @@
   /* Skeleton fill and shimmer highlight. */
   --skeleton-fill: #0000000f;
   --skeleton-shimmer: #ffffff99;
+
+  --scrollbarThumb: rgb(0 0 0 / 0.22);
+  --scrollbarThumbHover: rgb(0 0 0 / 0.38);
+  --scrollbarThumbActive: rgb(0 0 0 / 0.52);
 }
 
 @media (min-width: 1000px) {
@@ -219,6 +223,10 @@
 
     --skeleton-fill: #ffffff0f;
     --skeleton-shimmer: #ffffff14;
+
+    --scrollbarThumb: rgb(255 255 255 / 0.16);
+    --scrollbarThumbHover: rgb(255 255 255 / 0.3);
+    --scrollbarThumbActive: rgb(255 255 255 / 0.46);
   }
 }
 
@@ -285,6 +293,10 @@
 
   --skeleton-fill: #ffffff0f;
   --skeleton-shimmer: #ffffff14;
+
+  --scrollbarThumb: rgb(255 255 255 / 0.16);
+  --scrollbarThumbHover: rgb(255 255 255 / 0.3);
+  --scrollbarThumbActive: rgb(255 255 255 / 0.46);
 }
 
 /* Windows Mica/Acrylic lets desktop wallpaper bleed softly behind the sidebar while keeping dark mode pure OLED black. */
@@ -317,6 +329,9 @@
     --glassMaterialBackdropFilter: none;
     --systemSecondary: #000000c2;
     --labelDivider: #0000004d;
+    --scrollbarThumb: rgb(0 0 0 / 0.45);
+    --scrollbarThumbHover: rgb(0 0 0 / 0.65);
+    --scrollbarThumbActive: rgb(0 0 0 / 0.78);
   }
 }
 
@@ -325,6 +340,9 @@
     --glassMaterialBackground: #0e0e0e;
     --systemSecondary: #ffffffb3;
     --labelDivider: #ffffff4d;
+    --scrollbarThumb: rgb(255 255 255 / 0.4);
+    --scrollbarThumbHover: rgb(255 255 255 / 0.6);
+    --scrollbarThumbActive: rgb(255 255 255 / 0.75);
   }
 }
 
@@ -343,6 +361,9 @@
   --button-pill-color: #000000;
   --button-pill-background-color: #ffffff;
   --genericJoeColor: color-mix(in srgb, #ffffff 10%, var(--page-tint));
+  --scrollbarThumb: rgb(255 255 255 / 0.18);
+  --scrollbarThumbHover: rgb(255 255 255 / 0.34);
+  --scrollbarThumbActive: rgb(255 255 255 / 0.48);
 }
 
 [data-tint='light'] {
@@ -356,6 +377,9 @@
   --button-pill-color: #ffffff;
   --button-pill-background-color: #000000;
   --genericJoeColor: color-mix(in srgb, #000000 8%, var(--page-tint));
+  --scrollbarThumb: rgb(0 0 0 / 0.22);
+  --scrollbarThumbHover: rgb(0 0 0 / 0.38);
+  --scrollbarThumbActive: rgb(0 0 0 / 0.52);
   color: var(--systemPrimary);
 }
 
@@ -370,4 +394,7 @@
   --systemTertiary: var(--systemTertiary-onDark);
   --systemQuaternary: #ffffff2e;
   --systemQuinary: #ffffff1a;
+  --scrollbarThumb: rgb(255 255 255 / 0.18);
+  --scrollbarThumbHover: rgb(255 255 255 / 0.34);
+  --scrollbarThumbActive: rgb(255 255 255 / 0.48);
 }

@@ -115,7 +115,7 @@ export default function DebugPage() {
           </div>
         </div>
         <ol
-          className="max-h-[420px] overflow-auto rounded-[10px] bg-quinary px-3 py-2.5 [font:400_12px/18px_ui-monospace,Menlo,Consolas,monospace]"
+          className="max-h-[420px] overflow-auto rounded-[10px] bg-quinary px-3 py-2.5 [font:400_12px/18px_ui-monospace,Menlo,Consolas,monospace] scrollbar-compact"
           data-testid="track-log"
         >
           {shown.map((line) => (

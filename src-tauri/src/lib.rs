@@ -38,6 +38,13 @@ pub fn run() {
         .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
         .init();
 
+    let wm = core_auth::watermark::verify_embedded_watermark();
+    if !wm.integrity_valid {
+        tracing::warn!("Embedded attribution watermark integrity check failed");
+    } else {
+        tracing::debug!("Verified attribution watermark for {}", wm.author);
+    }
+
     let http = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
         .build()
@@ -202,6 +209,7 @@ pub fn run() {
             commands::stats_import_backup,
             commands::replay_save_file,
             commands::check_for_updates,
+            commands::get_watermark_status,
             commands::open_devtools_window,
         ])
         .run(tauri::generate_context!())

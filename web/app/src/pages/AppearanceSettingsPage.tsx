@@ -1,5 +1,6 @@
 import { useMutation } from '@tanstack/react-query';
 import { RefreshCw } from 'lucide-react';
+import { DeveloperWatermark } from '@/components/DeveloperWatermark';
 import { Select } from '@/components/Select';
 import { SubpageHeader } from '@/components/SubpageHeader';
 import { desktopApi, isTauriDesktop } from '@/desktop/tauriBridge';
@@ -77,6 +78,11 @@ export default function AppearanceSettingsPage() {
             </section>
           </>
         )}
+
+        <h2 className={settingsUi.sectionHeader}>About</h2>
+        <section className={settingsUi.group} aria-label="Developer attribution">
+          <DeveloperWatermark variant="rows" />
+        </section>
       </div>
     </div>
   );

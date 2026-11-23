@@ -156,7 +156,7 @@ function AudioOutputModalContent() {
 
         <div className="flex flex-col gap-2.5">
           {/* Keep 4px inset breathing room so focus-visible outlines never clip at scroll corners. */}
-          <div className="-m-1 flex max-h-[220px] flex-col gap-2 overflow-y-auto p-1 [scrollbar-width:thin]">
+          <div className="-m-1 flex max-h-[220px] flex-col gap-2 overflow-y-auto p-1 scrollbar-compact">
             <button
               type="button"
               onClick={() => selectDevice(null)}

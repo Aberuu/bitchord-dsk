@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { lazy, Suspense, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
+import { DeveloperWatermark } from '@/components/DeveloperWatermark';
 import { PageHeader } from '@/components/PageHeader';
 import { PrefetchLink } from '@/components/PrefetchLink';
 import { getBootstrapSnapshot } from '@/desktop/tauriBridge';
@@ -166,8 +167,8 @@ export default function SettingsPage() {
       {
         id: 'appearance',
         title: 'Appearance',
-        subtitle: 'Light / Dark theme, Match Windows, tray behavior, Stats for Nerds, updates',
-        keywords: 'theme dark light appearance system tray nerd stats updates',
+        subtitle: 'Light / Dark theme, Match Windows, tray behavior, Stats for Nerds, updates, About',
+        keywords: 'theme dark light appearance system tray nerd stats updates about credits developer github',
         to: '/settings/appearance',
       },
       {
@@ -398,9 +399,7 @@ export default function SettingsPage() {
               />
             </section>
 
-            <footer className="mt-7 flex items-center justify-center gap-3 type-callout text-tertiary">
-              <span>bitchord desktop {version}</span>
-            </footer>
+            <DeveloperWatermark variant="footer" version={version} />
           </>
         )}
       </div>

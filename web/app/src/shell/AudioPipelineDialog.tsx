@@ -62,7 +62,7 @@ export function AudioPipelineDialog() {
           <p className="mt-1 type-callout text-white/60">Live signal path, decoder to output</p>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-3 [scrollbar-width:thin]">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-3 scrollbar-compact">
           <div className="relative flex flex-col">
             <div
               aria-hidden="true"

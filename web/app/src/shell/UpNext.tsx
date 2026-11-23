@@ -352,7 +352,7 @@ export function UpNext() {
       ) : (
         <div
           ref={scrollRef}
-          className="min-h-0 flex-1 overflow-y-auto px-2 pb-[120px] [scrollbar-width:thin]"
+          className="min-h-0 flex-1 overflow-y-auto px-2 pb-[120px] scrollbar-compact"
           onClickCapture={(e) => {
             if (!suppressClickRef.current) return;
             e.preventDefault();
