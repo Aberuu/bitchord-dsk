@@ -1,6 +1,8 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Download, Play, RefreshCw, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { useContextMenu } from '@/components/contextMenu';
+import { TrackMenu } from '@/components/music/TrackMenu';
 import { PageHeader } from '@/components/PageHeader';
 import type { Track } from '@/data/music/types';
 import { desktopApi, isTauriDesktop, type DownloadedTrack, type DownloadProgress } from '@/desktop/tauriBridge';
@@ -33,6 +35,71 @@ function toQueueTrack(item: DownloadedTrack): Track {
     index: null,
     plays: null,
   };
+}
+
+function DownloadedTrackRow({
+  item,
+  removing,
+  onPlay,
+  onDelete,
+}: {
+  item: DownloadedTrack;
+  removing: boolean;
+  onPlay: () => void;
+  onDelete: () => void;
+}) {
+  const menu = useContextMenu();
+  return (
+    <div
+      className="group/row relative grid grid-cols-[44px_minmax(0,1fr)_auto_auto_auto] items-center gap-3 px-4 py-2.5 transition-colors duration-150 ease-out hover:bg-tracklist-hover data-open:bg-tracklist-hover hairline-[68px]"
+      data-open={menu.isOpen || undefined}
+      onContextMenu={menu.openAtEvent}
+    >
+      <button
+        type="button"
+        className="relative size-10 cursor-pointer overflow-hidden rounded-[6px] bg-quaternary"
+        aria-label={`Play ${item.title}`}
+        onClick={onPlay}
+      >
+        {item.artworkUrl ? (
+          <img src={item.artworkUrl} alt="" width={40} height={40} className="size-full object-cover" referrerPolicy="no-referrer" />
+        ) : (
+          <span className="grid size-full place-items-center text-secondary">
+            <Play size={14} aria-hidden="true" />
+          </span>
+        )}
+      </button>
+      <button
+        type="button"
+        className="flex min-w-0 cursor-pointer flex-col text-start"
+        onClick={onPlay}
+      >
+        <span className="truncate type-body-emphasized text-primary">{item.title}</span>
+        <span className="truncate type-callout text-secondary">
+          {item.artist}
+          {item.album ? ` · ${item.album}` : ''}
+        </span>
+      </button>
+      <span className="type-callout tabular-nums text-secondary">
+        {item.format}
+        {item.bitrateKbps ? ` · ${item.bitrateKbps} kbps` : ''} · {formatDuration(item.durationSec)}
+      </span>
+      <TrackMenu
+        track={toQueueTrack(item)}
+        menu={menu}
+        className="grid size-7 place-items-center rounded-full text-key opacity-0 transition-opacity duration-100 ease-in group-focus-within/row:opacity-100 group-hover/row:opacity-100 hover:bg-quinary data-open:opacity-100"
+      />
+      <button
+        type="button"
+        className="grid size-8 cursor-pointer place-items-center rounded-[6px] text-secondary hover:bg-quaternary hover:text-red disabled:opacity-40"
+        aria-label={`Delete ${item.title}`}
+        disabled={removing}
+        onClick={onDelete}
+      >
+        <Trash2 size={15} aria-hidden="true" />
+      </button>
+    </div>
+  );
 }
 
 export default function DownloadsPage() {
@@ -157,49 +224,13 @@ export default function DownloadsPage() {
 
             <section className={settingsUi.group} aria-label="Downloaded tracks">
               {items.map((item, idx) => (
-                <div
+                <DownloadedTrackRow
                   key={item.videoId}
-                  className="relative grid grid-cols-[44px_minmax(0,1fr)_auto_auto] items-center gap-3 px-4 py-2.5 hover:bg-tracklist-hover hairline-[68px]"
-                >
-                  <button
-                    type="button"
-                    className="relative size-10 cursor-pointer overflow-hidden rounded-[6px] bg-quaternary"
-                    aria-label={`Play ${item.title}`}
-                    onClick={() => playAll(idx)}
-                  >
-                    {item.artworkUrl ? (
-                      <img src={item.artworkUrl} alt="" width={40} height={40} className="size-full object-cover" referrerPolicy="no-referrer" />
-                    ) : (
-                      <span className="grid size-full place-items-center text-secondary">
-                        <Play size={14} aria-hidden="true" />
-                      </span>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    className="flex min-w-0 cursor-pointer flex-col text-start"
-                    onClick={() => playAll(idx)}
-                  >
-                    <span className="truncate type-body-emphasized text-primary">{item.title}</span>
-                    <span className="truncate type-callout text-secondary">
-                      {item.artist}
-                      {item.album ? ` · ${item.album}` : ''}
-                    </span>
-                  </button>
-                  <span className="type-callout tabular-nums text-secondary">
-                    {item.format}
-                    {item.bitrateKbps ? ` · ${item.bitrateKbps} kbps` : ''} · {formatDuration(item.durationSec)}
-                  </span>
-                  <button
-                    type="button"
-                    className="grid size-8 cursor-pointer place-items-center rounded-[6px] text-secondary hover:bg-quaternary hover:text-red disabled:opacity-40"
-                    aria-label={`Delete ${item.title}`}
-                    disabled={remove.isPending}
-                    onClick={() => remove.mutate(item.videoId)}
-                  >
-                    <Trash2 size={15} aria-hidden="true" />
-                  </button>
-                </div>
+                  item={item}
+                  removing={remove.isPending}
+                  onPlay={() => playAll(idx)}
+                  onDelete={() => remove.mutate(item.videoId)}
+                />
               ))}
             </section>
           </>

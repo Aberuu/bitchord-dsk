@@ -3,9 +3,11 @@ import { ChevronRight, Clock, Download, FileMusic, ImageDown, Play, Upload } fro
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { SiSpotify } from 'react-icons/si';
 import { useNavigate, useSearchParams } from 'react-router';
+import { useContextMenu } from '@/components/contextMenu';
 import { PageHeader } from '@/components/PageHeader';
 import { PrefetchLink } from '@/components/PrefetchLink';
 import { SquareLockup } from '@/components/music/Lockups';
+import { TrackMenu } from '@/components/music/TrackMenu';
 import { ReplayCardCarousel } from '@/components/replay/ReplayCardCarousel';
 import { renderReplayPosterPngBase64 } from '@/components/replay/ReplayPoster';
 import { useLibraryPlaylists, useSignedIn } from '@/data/music/queries';
@@ -37,6 +39,53 @@ interface FolderLinkRowProps {
   icon: ReactNode;
   title: string;
   subtitle?: string | null;
+}
+
+function rankedSongToTrack(song: RankedSong): Track {
+  return {
+    videoId: song.videoId,
+    title: song.title,
+    artists: song.artist ? [{ name: song.artist, id: song.artistId }] : [],
+    album: song.albumName ? { name: song.albumName, id: song.albumId } : null,
+    durationSec: Math.max(0, Math.round(song.ms / Math.max(1, song.plays) / 1000)),
+    thumbnail: song.artworkUrl,
+    explicit: false,
+    index: null,
+    plays: null,
+  };
+}
+
+function TopSongRow({ song, rank, onPlay }: { song: RankedSong; rank: number; onPlay: () => void }) {
+  const menu = useContextMenu();
+  const track = rankedSongToTrack(song);
+  return (
+    <div
+      className="group/row relative flex w-full items-center gap-3 px-4 py-2.5 transition-colors duration-150 ease-out hover:bg-tracklist-hover data-open:bg-tracklist-hover hairline-[56px]"
+      data-open={menu.isOpen || undefined}
+      onContextMenu={menu.openAtEvent}
+    >
+      <button type="button" onClick={onPlay} className="flex min-w-0 flex-1 items-center gap-3 text-start">
+        <RankBadge rank={rank} />
+        <RankedArtwork url={song.artworkUrl} title={song.title} />
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate type-body-emphasized text-primary">{song.title}</span>
+          <span className="truncate type-callout text-secondary">
+            {[song.artist, formatListening(song.ms)].filter(Boolean).join(' · ')}
+          </span>
+        </span>
+      </button>
+      {song.plays > 0 && (
+        <span className="flex-none type-callout text-tertiary tabular-nums">
+          {formatPlays(song.plays)}
+        </span>
+      )}
+      <TrackMenu
+        track={track}
+        menu={menu}
+        className="grid size-7 flex-none place-items-center rounded-full text-key opacity-0 transition-opacity duration-100 ease-in group-focus-within/row:opacity-100 group-hover/row:opacity-100 hover:bg-quinary data-open:opacity-100"
+      />
+    </div>
+  );
 }
 
 function FolderLinkRow({ to, icon, title, subtitle }: FolderLinkRowProps) {
@@ -245,18 +294,7 @@ export default function LibraryOverviewPage() {
   };
 
   const handlePlaySong = (song: RankedSong) => {
-    const track: Track = {
-      videoId: song.videoId,
-      title: song.title,
-      artists: song.artist ? [{ name: song.artist, id: song.artistId }] : [],
-      album: song.albumName ? { name: song.albumName, id: song.albumId } : null,
-      durationSec: Math.max(0, Math.round(song.ms / Math.max(1, song.plays) / 1000)),
-      thumbnail: song.artworkUrl,
-      explicit: false,
-      index: null,
-      plays: null,
-    };
-    playTrack(track, { title: `Library · ${summary?.label ?? 'Top Songs'}`, type: 'library', id: 'replay' });
+    playTrack(rankedSongToTrack(song), { title: `Library · ${summary?.label ?? 'Top Songs'}`, type: 'library', id: 'replay' });
   };
 
   const handleOpenArtist = (artist: RankedEntry) => {
@@ -461,26 +499,12 @@ export default function LibraryOverviewPage() {
               </div>
               <div className="overflow-hidden rounded-[12px] bg-quinary">
                 {topSongs.map((song, idx) => (
-                  <button
+                  <TopSongRow
                     key={`${song.videoId}-${idx}`}
-                    type="button"
-                    onClick={() => handlePlaySong(song)}
-                    className="flex w-full items-center gap-3 px-4 py-2.5 text-start transition-colors hover:bg-tracklist-hover hairline-[56px]"
-                  >
-                    <RankBadge rank={idx + 1} />
-                    <RankedArtwork url={song.artworkUrl} title={song.title} />
-                    <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="truncate type-body-emphasized text-primary">{song.title}</span>
-                      <span className="truncate type-callout text-secondary">
-                        {[song.artist, formatListening(song.ms)].filter(Boolean).join(' · ')}
-                      </span>
-                    </span>
-                    {song.plays > 0 && (
-                      <span className="flex-none type-callout text-tertiary tabular-nums">
-                        {formatPlays(song.plays)}
-                      </span>
-                    )}
-                  </button>
+                    song={song}
+                    rank={idx + 1}
+                    onPlay={() => handlePlaySong(song)}
+                  />
                 ))}
               </div>
             </section>

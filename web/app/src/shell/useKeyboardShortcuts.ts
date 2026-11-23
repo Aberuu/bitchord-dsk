@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useNavigate } from 'react-router';
 import { usePlayer } from '@/state/player';
 import { useUi } from '@/state/ui';
+import { findMusicSearchInput, focusAndSelectInput, isSearchFocusShortcut } from './searchShortcut';
 
 /** Typing in a field shouldn't trigger the player. */
 function typing(target: EventTarget | null): boolean {
@@ -10,24 +11,39 @@ function typing(target: EventTarget | null): boolean {
   return element.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(element.tagName);
 }
 
-function focusSearch(navigate: ReturnType<typeof useNavigate>) {
-  const field = document.querySelector<HTMLInputElement>('input[type="search"]');
-  if (field) return field.focus();
-  navigate('/search');
-  // The search page is lazy: focus its field once it has rendered (for up to 3 s).
+function targetClosest(target: EventTarget | null, selector: string): Element | null {
+  return target instanceof Element ? target.closest(selector) : null;
+}
+
+function attemptFocusMusicSearch() {
   const started = performance.now();
   const attempt = () => {
-    const field = document.querySelector<HTMLInputElement>('input[type="search"]');
-    if (field) field.focus();
+    const mounted = findMusicSearchInput();
+    if (mounted) focusAndSelectInput(mounted);
     else if (performance.now() - started < 3000) setTimeout(attempt, 50);
   };
   attempt();
 }
 
+function focusSearch(navigate: ReturnType<typeof useNavigate>) {
+  const ui = useUi.getState();
+  if (ui.fullScreen) {
+    if (!ui.fullScreenSearchOpen) ui.setFullScreenSearchOpen(true);
+    attemptFocusMusicSearch();
+    return;
+  }
+  const field = findMusicSearchInput();
+  if (field) return focusAndSelectInput(field);
+  navigate('/search');
+  // The search page is lazy: focus its field once it has rendered (for up to 3 s).
+  attemptFocusMusicSearch();
+}
+
 /**
  * The web player's shortcuts, which BitChord matches (report §8): Space
- * play/pause; ⌘/Ctrl+→ / ← next/previous; ⌘/Ctrl+↑ / ↓ volume; ⌘/Ctrl+F or
- * "/" focuses search; Esc closes the full-screen player, else the side panel.
+ * play/pause; ⌘/Ctrl+→ / ← next/previous; ⌘/Ctrl+↑ / ↓ volume; ⌘/Ctrl+K,
+ * ⌘/Ctrl+F, or "/" focuses music search; Esc closes the full-screen player,
+ * else the side panel.
  */
 export function useKeyboardShortcuts() {
   const navigate = useNavigate();
@@ -37,7 +53,7 @@ export function useKeyboardShortcuts() {
       const player = usePlayer.getState();
       const command = event.metaKey || event.ctrlKey;
 
-      if (command && (event.key === 'f' || event.key === 'F')) {
+      if (isSearchFocusShortcut(event)) {
         event.preventDefault();
         return focusSearch(navigate);
       }
@@ -45,7 +61,7 @@ export function useKeyboardShortcuts() {
 
       if (event.key === ' ' && !command) {
         // A focused button already answers Space itself.
-        if ((event.target as HTMLElement | null)?.closest('button, a, [role="slider"]')) return;
+        if (targetClosest(event.target, 'button, a, [role="slider"]')) return;
         event.preventDefault();
         return player.togglePlay();
       }
@@ -56,7 +72,12 @@ export function useKeyboardShortcuts() {
       if (event.key === 'Escape') {
         const ui = useUi.getState();
         // A menu or dialog over the player closes first, on its own.
-        if ((event.target as HTMLElement | null)?.closest('[role="menu"], [role="dialog"]:not([data-full-screen])')) return;
+        if (targetClosest(event.target, '[role="menu"], [role="dialog"]:not([data-full-screen])')) return;
+        if (ui.fullScreen && ui.fullScreenSearchOpen) {
+          event.preventDefault();
+          ui.setFullScreenSearchOpen(false);
+          return;
+        }
         if (ui.fullScreen) ui.setFullScreen(false);
         else if (ui.sidePanel) ui.closeSidePanel();
         return;

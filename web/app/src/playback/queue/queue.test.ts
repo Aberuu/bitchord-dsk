@@ -7,12 +7,15 @@ import {
   autoplaySectionStart,
   buildContextQueue,
   computeJumpOrder,
+  moveUpcomingEntry,
   playedUserQueueIndices,
+  resolveQueueDropTarget,
   shuffledStartingOrder,
   shuffledUpcomingOrder,
   upcomingUserQueueIndices,
   userQueueInsertionIndex,
   type QueueEntry,
+  type QueueRowBox,
   type QueueTier,
 } from './timeline';
 
@@ -171,5 +174,40 @@ describe('QueueTimeline', () => {
     const identity = () => 0.999999; // Fisher-Yates with j = i keeps the order
     const result = shuffledUpcomingOrder(['context', 'context', 'context'], identity);
     expect(result).not.toEqual([0, 1, 2]);
+  });
+
+  it('reorders upcoming rows within Up Next and keeps active/past rows locked', () => {
+    const t = timeline('cuuca');
+    expect(moveUpcomingEntry(t, 0, 0, 2)).toBeNull();
+    expect(moveUpcomingEntry(t, 1, 1, 2)).toBeNull();
+    const moved = moveUpcomingEntry(t, 0, 1, 3)!;
+    expect(order(moved)).toBe('c0 u2 c3 u1 a4');
+    expect(moved[3]!.tier).toBe('user');
+  });
+
+  it('updates tier when moving across the Up Next and AutoPlay boundary', () => {
+    const t = timeline('cucaa');
+    const promoted = moveUpcomingEntry(t, 0, 4, 1, 'upnext')!;
+    expect(order(promoted)).toBe('c0 a4 u1 c2 a3');
+    expect(promoted[1]!.tier).toBe('user');
+
+    const demoted = moveUpcomingEntry(t, 0, 2, 2, 'autoplay')!;
+    expect(order(demoted)).toBe('c0 u1 c2 a3 a4');
+    expect(demoted[2]!.tier).toBe('autoplay');
+  });
+
+  it('resolves pointer drop targets for top, middle, bottom, and cross-section edges', () => {
+    const boxes: QueueRowBox[] = [
+      { at: 1, section: 'upnext', top: 100, bottom: 155 },
+      { at: 2, section: 'upnext', top: 155, bottom: 210 },
+      { at: 3, section: 'autoplay', top: 260, bottom: 315 },
+      { at: 4, section: 'autoplay', top: 315, bottom: 370 },
+    ];
+    expect(resolveQueueDropTarget(boxes, 1, 110)).toBeNull();
+    expect(resolveQueueDropTarget(boxes, 1, 200)).toEqual({ to: 2, indicatorAt: 2, edge: 'bottom', section: 'upnext' });
+    expect(resolveQueueDropTarget(boxes, 1, 270)).toEqual({ to: 2, indicatorAt: 3, edge: 'top', section: 'autoplay' });
+    expect(resolveQueueDropTarget(boxes, 1, 355)).toEqual({ to: 4, indicatorAt: 4, edge: 'bottom', section: 'autoplay' });
+    expect(resolveQueueDropTarget(boxes, 3, 240)).toEqual({ to: 3, indicatorAt: 2, edge: 'bottom', section: 'upnext' });
+    expect(resolveQueueDropTarget(boxes, 4, 110)).toEqual({ to: 1, indicatorAt: 1, edge: 'top', section: 'upnext' });
   });
 });

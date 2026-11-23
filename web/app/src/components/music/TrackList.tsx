@@ -1,5 +1,6 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useEffect, useRef, useState } from 'react';
+import { useContextMenu } from '@/components/contextMenu';
 import { PrefetchLink } from '@/components/PrefetchLink';
 import { PauseIcon, PlayIcon } from '@/components/icons/Transport';
 import type { ArtistRef, Track } from '@/data/music/types';
@@ -46,10 +47,10 @@ const link = 'text-inherit hover:underline group-data-current/row:text-primary';
  * a fill on hover, a stronger one for the playing row.
  */
 const row = [
-  'group/row relative grid items-center bg-transparent hover:bg-tracklist-hover data-unavailable:cursor-default',
+  'group/row relative grid items-center bg-transparent transition-colors duration-150 ease-out hover:bg-tracklist-hover data-open:bg-tracklist-hover data-unavailable:cursor-default',
   'data-current:bg-[color-mix(in_srgb,var(--systemPrimary)_12%,transparent)]',
   'before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:border-t-[0.5px] before:border-t-divider',
-  'hover:before:border-t-transparent data-current:before:border-t-transparent [&:hover+&]:before:border-t-transparent [&[data-current]+&]:before:border-t-transparent',
+  'hover:before:border-t-transparent data-open:before:border-t-transparent data-current:before:border-t-transparent [&:hover+&]:before:border-t-transparent [&[data-open]+&]:before:border-t-transparent [&[data-current]+&]:before:border-t-transparent',
 ].join(' ');
 
 const rowVariant: Record<Variant, string> = {
@@ -96,6 +97,7 @@ function Row({ track, variant, position, fallbackArtwork, onPlayRow }: RowProps)
   const current = usePlayer((s) => s.nowPlaying?.videoId === track.videoId);
   const playing = usePlayer((s) => s.nowPlaying?.videoId === track.videoId && (s.status === 'playing' || s.status === 'buffering'));
   const togglePlay = usePlayer((s) => s.togglePlay);
+  const menu = useContextMenu();
   const unavailable = track.unavailable;
   const onPlay = () => (unavailable ? undefined : current ? togglePlay() : onPlayRow());
 
@@ -104,15 +106,19 @@ function Row({ track, variant, position, fallbackArtwork, onPlayRow }: RowProps)
       className={`${row} ${rowVariant[variant]}`}
       data-variant={variant}
       data-current={current || undefined}
+      data-open={menu.isOpen || undefined}
       data-unavailable={unavailable}
       title={unavailable === 'matching' ? 'Looking for this on YouTube Music…' : unavailable === 'missing' ? 'Not found on YouTube Music' : undefined}
       onDoubleClick={onPlay}
+      onContextMenu={!unavailable ? menu.openAtEvent : undefined}
     >
       <div className={`${cell} gap-3`}>
         <div className={`relative grid w-10 shrink-0 place-items-center${variant === 'playlist' ? ' ms-[7px]' : ''}`}>
           {variant === 'playlist' ? (
             <>
-              <Artwork src={track.thumbnail ?? fallbackArtwork ?? null} displayWidth={40} radius="var(--radius-artwork-small)" />
+              <div className="size-10 overflow-hidden rounded-artwork-sm transition-transform duration-150 ease-out group-hover/row:scale-[1.03]">
+                <Artwork src={track.thumbnail ?? fallbackArtwork ?? null} displayWidth={40} radius="var(--radius-artwork-small)" />
+              </div>
               {current && (
                 // The playing row's marker: a still play glyph over the artwork (or where the number was).
                 <span
@@ -188,6 +194,7 @@ function Row({ track, variant, position, fallbackArtwork, onPlayRow }: RowProps)
         {!unavailable && (
           <TrackMenu
             track={track}
+            menu={menu}
             className="absolute end-2.5 hidden size-7 place-items-center rounded-full text-key group-focus-within/row:grid group-hover/row:grid hover:bg-quinary data-open:grid"
           />
         )}

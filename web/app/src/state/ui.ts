@@ -10,6 +10,8 @@ interface UiState {
   closeSidePanel: () => void;
   fullScreen: boolean;
   setFullScreen: (open: boolean) => void;
+  fullScreenSearchOpen: boolean;
+  setFullScreenSearchOpen: (open: boolean) => void;
   audioOutputOpen: boolean;
   setAudioOutputOpen: (open: boolean) => void;
   audioPipelineOpen: boolean;
@@ -43,7 +45,10 @@ export const useUi = create<UiState>()((set) => ({
   toggleSidePanel: (panel) => set((s) => ({ sidePanel: s.sidePanel === panel ? null : panel })),
   closeSidePanel: () => set({ sidePanel: null }),
   fullScreen: false,
-  setFullScreen: (fullScreen) => set({ fullScreen }),
+  setFullScreen: (fullScreen) =>
+    set((s) => ({ fullScreen, fullScreenSearchOpen: fullScreen ? s.fullScreenSearchOpen : false })),
+  fullScreenSearchOpen: false,
+  setFullScreenSearchOpen: (fullScreenSearchOpen) => set({ fullScreenSearchOpen }),
   audioOutputOpen: false,
   setAudioOutputOpen: (audioOutputOpen) => set({ audioOutputOpen }),
   audioPipelineOpen: false,

@@ -1,12 +1,17 @@
 import { Check } from 'lucide-react';
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { computePointMenuPosition, type MenuPoint } from './contextMenu';
 
 export type MenuPlacement = 'above-start' | 'above-end' | 'below-end';
 
 interface MenuProps {
-  /** The element the menu opens from. */
-  anchor: HTMLElement;
+  /** The element the menu opens from when clicked. */
+  anchor?: HTMLElement | null;
+  /** Cursor viewport coordinates when opened via right-click context menu. */
+  point?: MenuPoint | null;
+  /** Element to restore focus to on Escape when opened via right-click. */
+  returnFocusTo?: HTMLElement | null;
   placement?: MenuPlacement;
   onClose: () => void;
   label: string;
@@ -16,19 +21,38 @@ interface MenuProps {
 }
 
 /**
- * Apple's contextual menu (report §8): a glass panel, 185px minimum, 13px
- * items, hairline separators, red for destructive items. Closes on Escape, a
- * click outside, or a scroll of the page under it.
+ * Apple's contextual menu (report §8): a Liquid Glass panel matching the floating
+ * playbar, 185px minimum, 13px items, hairline separators, red for destructive items.
+ * Closes on Escape, outside click/contextmenu, or underlying scroll.
  */
-export function Menu({ anchor, placement = 'below-end', onClose, label, matchWidth, children }: MenuProps) {
+export function Menu({ anchor, point, returnFocusTo, placement = 'below-end', onClose, label, matchWidth, children }: MenuProps) {
   const panel = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState<React.CSSProperties>({ visibility: 'hidden' });
+  const scroller = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<CSSProperties>({ visibility: 'hidden' });
 
-  useLayoutEffect(() => {
+  const updatePosition = useCallback(() => {
+    if (point) {
+      const box = panel.current?.getBoundingClientRect();
+      const width = box?.width && box.width > 0 ? box.width : 200;
+      const height = box?.height && box.height > 0 ? box.height : 180;
+      const clamped = computePointMenuPosition(
+        point,
+        { width, height },
+        { width: window.innerWidth, height: window.innerHeight },
+      );
+      setPosition({
+        left: clamped.left,
+        top: clamped.top,
+        maxHeight: clamped.maxHeight,
+      });
+      return;
+    }
+
+    if (!anchor) return;
     const rect = anchor.getBoundingClientRect();
     const gap = 6;
     const width = matchWidth ? { minWidth: rect.width } : {};
-    const above = { bottom: window.innerHeight - rect.top + gap, maxHeight: rect.top - 2 * gap, ...width };
+    const above = { bottom: window.innerHeight - rect.top + gap, maxHeight: Math.max(120, rect.top - 2 * gap), ...width };
     setPosition(
       placement === 'above-start'
         ? { left: Math.max(8, rect.left), ...above }
@@ -37,19 +61,32 @@ export function Menu({ anchor, placement = 'below-end', onClose, label, matchWid
           : {
               right: Math.max(8, window.innerWidth - rect.right),
               top: rect.bottom + gap,
-              maxHeight: window.innerHeight - rect.bottom - 2 * gap,
+              maxHeight: Math.max(120, window.innerHeight - rect.bottom - 2 * gap),
               ...width,
             },
     );
-  }, [anchor, placement, matchWidth]);
+  }, [anchor, point, placement, matchWidth]);
+
+  useLayoutEffect(() => {
+    updatePosition();
+  }, [updatePosition]);
+
+  useEffect(() => {
+    const contentEl = scroller.current;
+    if (!contentEl || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => updatePosition());
+    observer.observe(contentEl);
+    return () => observer.disconnect();
+  }, [updatePosition]);
 
   useEffect(() => {
     panel.current?.querySelector<HTMLElement>('[role^="menuitem"]')?.focus({ preventScroll: true });
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        event.preventDefault();
         event.stopPropagation();
         onClose();
-        anchor.focus();
+        (returnFocusTo ?? anchor)?.focus();
       } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
         const items = [...(panel.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]:not(:disabled)') ?? [])];
@@ -69,20 +106,33 @@ export function Menu({ anchor, placement = 'below-end', onClose, label, matchWid
       document.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', onClose);
     };
-  }, [anchor, onClose]);
+  }, [anchor, returnFocusTo, onClose]);
 
   return createPortal(
     <>
-      <div className="fixed inset-0 z-[calc(var(--z-contextual-menus)-1)]" onPointerDown={onClose} aria-hidden="true" />
+      <div
+        className="fixed inset-0 z-[calc(var(--z-contextual-menus)-1)]"
+        onPointerDown={(e) => {
+          if (e.button === 2) return;
+          onClose();
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onClose();
+        }}
+        aria-hidden="true"
+      />
       <div
         ref={panel}
-        // Apple's amp-contextual-menu (report §8).
-        className="fixed z-(--z-contextual-menus) max-w-[300px] min-w-[185px] animate-menu-in overflow-y-auto rounded-[10px] bg-thick-material p-[5px] shadow-[0_0_0_0.5px_var(--vibrantDivider),0_10px_40px_var(--glassMaterialShadowColor)] [backdrop-filter:saturate(2.2)_blur(32px)]"
+        className="glass-menu fixed z-(--z-contextual-menus) max-w-[300px] min-w-[185px] animate-menu-in overflow-hidden rounded-[14px]"
         style={position}
         role="menu"
         aria-label={label}
+        onContextMenu={(e) => e.preventDefault()}
       >
-        {children}
+        <div ref={scroller} className="max-h-[inherit] overflow-y-auto p-1.5 [scrollbar-width:thin]">
+          {children}
+        </div>
       </div>
     </>,
     document.body,
@@ -104,7 +154,8 @@ interface MenuItemProps {
 export function MenuItem({ onSelect, icon, checked, destructive, disabled, trailing, children }: MenuItemProps) {
   return (
     <button
-      className="flex min-h-7 w-full items-center gap-2 rounded-[5px] px-2 py-1 text-start type-body text-primary enabled:hover:bg-quinary focus-visible:bg-quinary disabled:text-tertiary data-destructive:text-destructive"
+      type="button"
+      className="flex min-h-[30px] w-full items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-start type-body text-primary transition-colors duration-100 enabled:hover:bg-quaternary/80 focus-visible:bg-quaternary/80 disabled:text-tertiary data-destructive:text-destructive"
       role={checked === undefined ? 'menuitem' : 'menuitemradio'}
       aria-checked={checked === undefined ? undefined : !!checked}
       data-destructive={destructive || undefined}
@@ -125,5 +176,5 @@ export function MenuSeparator() {
 
 /** A non-interactive heading inside a menu. */
 export function MenuHeader({ children }: { children: ReactNode }) {
-  return <div className="px-2 pt-1.5 pb-1 type-subhead-emphasized text-secondary">{children}</div>;
+  return <div className="px-2.5 pt-1.5 pb-1 type-subhead-emphasized text-secondary">{children}</div>;
 }

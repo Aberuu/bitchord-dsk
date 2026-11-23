@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight, Download, ListEnd, ListPlus, ListStart, MoreHorizontal, Star } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useContextMenu, type ContextMenuController } from '@/components/contextMenu';
 import { Menu, MenuHeader, MenuItem, MenuSeparator, type MenuPlacement } from '@/components/Menu';
 import {
   useAddToPlaylist,
@@ -122,6 +123,7 @@ export function TrackMenu({
   className,
   placement,
   onOpenChange,
+  menu: externalMenu,
 }: {
   track: Track;
   className?: string;
@@ -129,31 +131,42 @@ export function TrackMenu({
   placement?: MenuPlacement;
   /** Told when the menu opens and closes; most mounts don't need to know. */
   onOpenChange?: (open: boolean) => void;
+  /** Shared controller when a parent row also triggers this menu on right-click. */
+  menu?: ContextMenuController;
 }) {
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const close = useCallback(() => setAnchor(null), []);
+  const internalMenu = useContextMenu();
+  const menu = externalMenu ?? internalMenu;
   useEffect(() => {
-    onOpenChange?.(anchor !== null);
-  }, [anchor, onOpenChange]);
+    onOpenChange?.(menu.isOpen);
+  }, [menu.isOpen, onOpenChange]);
   return (
     <>
       <button
+        type="button"
+        data-no-drag="true"
         className={className}
         aria-label={`More options for ${track.title}`}
         aria-haspopup="menu"
-        aria-expanded={anchor !== null}
-        data-open={anchor !== null || undefined}
+        aria-expanded={menu.isOpen}
+        data-open={menu.isOpen || undefined}
         onClick={(event) => {
           event.stopPropagation();
-          setAnchor(anchor ? null : event.currentTarget);
+          menu.toggleFromAnchor(event.currentTarget);
         }}
         onDoubleClick={(event) => event.stopPropagation()}
       >
         <MoreHorizontal size={18} strokeWidth={2} />
       </button>
-      {anchor && (
-        <Menu anchor={anchor} placement={placement} onClose={close} label={track.title}>
-          <TrackMenuItems track={track} onClose={close} />
+      {menu.isOpen && (
+        <Menu
+          anchor={menu.anchor}
+          point={menu.point}
+          returnFocusTo={menu.returnFocusTo}
+          placement={placement}
+          onClose={menu.close}
+          label={track.title}
+        >
+          <TrackMenuItems track={track} onClose={menu.close} />
         </Menu>
       )}
     </>

@@ -1,6 +1,8 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { open } from '@tauri-apps/plugin-dialog';
 import { FolderPlus, Music, Play, RefreshCw, Trash2 } from 'lucide-react';
+import { useContextMenu } from '@/components/contextMenu';
+import { TrackMenu } from '@/components/music/TrackMenu';
 import { PageHeader } from '@/components/PageHeader';
 import type { Track } from '@/data/music/types';
 import { desktopApi, isTauriDesktop, type LocalTrack } from '@/desktop/tauriBridge';
@@ -34,6 +36,46 @@ function toQueueTrack(t: LocalTrack): Track {
     index: null,
     plays: null,
   };
+}
+
+function LocalTrackRow({ track, onPlay }: { track: LocalTrack; onPlay: () => void }) {
+  const menu = useContextMenu();
+  const queueTrack = toQueueTrack(track);
+  return (
+    <div
+      className="group/row relative grid grid-cols-[36px_minmax(0,1fr)_auto_auto] items-center gap-3 px-4 py-2.5 transition-colors duration-150 ease-out hover:bg-tracklist-hover data-open:bg-tracklist-hover hairline-[56px]"
+      data-open={menu.isOpen || undefined}
+      onContextMenu={menu.openAtEvent}
+    >
+      <button
+        type="button"
+        className="grid size-8 cursor-pointer place-items-center rounded-[6px] bg-quaternary text-primary hover:bg-key-bg hover:text-white"
+        aria-label={`Play ${track.title}`}
+        onClick={onPlay}
+      >
+        <Play size={13} fill="currentColor" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        className="flex min-w-0 cursor-pointer flex-col text-start"
+        onClick={onPlay}
+      >
+        <span className="truncate type-body-emphasized text-primary">{track.title}</span>
+        <span className="truncate type-callout text-secondary">
+          {track.artist}
+          {track.album ? ` · ${track.album}` : ''}
+        </span>
+      </button>
+      <span className="type-callout tabular-nums text-secondary">
+        {formatSpec(track)} · {formatDuration(track.durationSec)}
+      </span>
+      <TrackMenu
+        track={queueTrack}
+        menu={menu}
+        className="grid size-7 place-items-center rounded-full text-key opacity-0 transition-opacity duration-100 ease-in group-focus-within/row:opacity-100 group-hover/row:opacity-100 hover:bg-quinary data-open:opacity-100"
+      />
+    </div>
+  );
 }
 
 export default function LocalLibraryPage() {
@@ -200,33 +242,7 @@ export default function LocalLibraryPage() {
             ) : (
               <section className={settingsUi.group} aria-label="Local tracks">
                 {tracks.map((track, idx) => (
-                  <div
-                    key={track.id}
-                    className="relative grid grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-2.5 hover:bg-tracklist-hover hairline-[56px]"
-                  >
-                    <button
-                      type="button"
-                      className="grid size-8 cursor-pointer place-items-center rounded-[6px] bg-quaternary text-primary hover:bg-key-bg hover:text-white"
-                      aria-label={`Play ${track.title}`}
-                      onClick={() => void playFromLocal(idx)}
-                    >
-                      <Play size={13} fill="currentColor" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="flex min-w-0 cursor-pointer flex-col text-start"
-                      onClick={() => void playFromLocal(idx)}
-                    >
-                      <span className="truncate type-body-emphasized text-primary">{track.title}</span>
-                      <span className="truncate type-callout text-secondary">
-                        {track.artist}
-                        {track.album ? ` · ${track.album}` : ''}
-                      </span>
-                    </button>
-                    <span className="type-callout tabular-nums text-secondary">
-                      {formatSpec(track)} · {formatDuration(track.durationSec)}
-                    </span>
-                  </div>
+                  <LocalTrackRow key={track.id} track={track} onPlay={() => void playFromLocal(idx)} />
                 ))}
               </section>
             )}

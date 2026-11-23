@@ -1,15 +1,17 @@
 import { useSearchParams } from 'react-router';
+import { useContextMenu } from '@/components/contextMenu';
 import { PrefetchLink } from '@/components/PrefetchLink';
 import { Artwork } from '@/components/music/Artwork';
 import { CategoryTiles } from '@/components/music/CategoryTiles';
 import { hrefFor } from '@/components/music/links';
 import { playTrack, toTrack } from '@/components/music/play';
 import { SearchField } from '@/components/music/SearchField';
+import { buildSearchShelves } from '@/components/music/searchOptions';
 import { Shelves } from '@/components/music/ShelfView';
 import { TrackMenu } from '@/components/music/TrackMenu';
 import { EmptyState, LoadError, NeedsExtension } from '@/components/music/States';
 import { useCategories, useSearch, useYouTubeReady } from '@/data/music/queries';
-import type { MusicItem, SearchResults, Shelf } from '@/data/music/types';
+import type { MusicItem } from '@/data/music/types';
 import { SkeletonBlock, SkeletonLine } from '@/components/Skeleton';
 import { ShelfSkeleton } from '@/skeletons/ShelfSkeleton';
 
@@ -25,19 +27,6 @@ const KIND_LABEL: Record<MusicItem['kind'], string> = {
   unknown: '',
 };
 
-/** Apple's result shelves, in its order, from results grouped by kind. */
-function shelvesFor(results: SearchResults): Shelf[] {
-  const shelf = (title: string, items: MusicItem[], layout: Shelf['layout']): Shelf | null =>
-    items.length ? { title, strapline: null, layout, items, seeAll: null } : null;
-  return [
-    shelf('Artists', results.artists, 'circle'),
-    shelf('Albums', results.albums, 'square'),
-    shelf('Songs', results.songs, 'tracks'),
-    shelf('Playlists', results.playlists, 'square'),
-    shelf('Videos', results.videos, 'video'),
-  ].filter((s): s is Shelf => !!s);
-}
-
 const sectionTitle = 'mx-(--body-gutter) mt-3 type-title-2-emphasized';
 // Top Results: 3 columns, gap 20px; 118px cards with 90px artwork.
 const topGrid =
@@ -45,7 +34,7 @@ const topGrid =
 // The card is a relative box and the play/link layer fills it: a playable
 // item's track menu is a sibling over the card's bottom-right corner, because a
 // button can't be nested inside the card's own link or button.
-const topCard = 'group/top relative rounded-[8px] bg-quinary hover:bg-quaternary';
+const topCard = 'group/top relative rounded-[8px] bg-quinary transition-colors duration-150 ease-out hover:bg-quaternary data-open:bg-quaternary';
 const top =
   'grid min-h-[118px] w-full grid-cols-[90px_minmax(0,1fr)] items-center gap-x-3.5 px-3 py-3.5 text-left';
 const topMenu =
@@ -55,6 +44,7 @@ const topText = 'flex min-w-0 flex-col gap-0.5';
 function TopResult({ item }: { item: MusicItem }) {
   const href = hrefFor(item);
   const playable = item.kind === 'song' || item.kind === 'video';
+  const menu = useContextMenu();
   const body = (
     <>
       <div className="w-[90px]">
@@ -69,7 +59,11 @@ function TopResult({ item }: { item: MusicItem }) {
     </>
   );
   return (
-    <div className={topCard}>
+    <div
+      className={topCard}
+      data-open={menu.isOpen || undefined}
+      onContextMenu={playable ? menu.openAtEvent : undefined}
+    >
       {href ? (
         <PrefetchLink to={href} className={top}>
           {body}
@@ -79,7 +73,7 @@ function TopResult({ item }: { item: MusicItem }) {
           {body}
         </button>
       )}
-      {playable && <TrackMenu track={toTrack(item)} className={topMenu} />}
+      {playable && <TrackMenu track={toTrack(item)} menu={menu} className={topMenu} />}
     </div>
   );
 }
@@ -101,8 +95,8 @@ function ResultsSkeleton() {
           </div>
         ))}
       </div>
+      <ShelfSkeleton kind="tracks" />
       <ShelfSkeleton kind="circle" />
-      <ShelfSkeleton kind="square" />
     </div>
   );
 }
@@ -112,7 +106,7 @@ function Results({ query }: { query: string }) {
   if (search.isError) return <LoadError error={search.error} onRetry={() => void search.refetch()} />;
   if (!search.data) return <ResultsSkeleton />;
   const results = search.data;
-  const shelves = shelvesFor(results);
+  const shelves = buildSearchShelves(results);
   if (!results.top.length && !shelves.length) {
     return <EmptyState title="No Results" detail={`Try a new search for something other than “${query}”.`} />;
   }

@@ -1,21 +1,38 @@
 import { Search, X } from 'lucide-react';
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
+import { useContextMenu } from '@/components/contextMenu';
 import { useSuggestions } from '@/data/music/queries';
 import type { MusicItem } from '@/data/music/types';
+import { searchShortcutHint } from '@/shell/searchShortcut';
 import { Artwork } from './Artwork';
 import { hrefFor } from './links';
 import { playTrack, toTrack } from './play';
+import { buildSuggestionOptions, type SearchOption } from './searchOptions';
 import { TrackMenu } from './TrackMenu';
-
-type Option = { kind: 'query'; text: string; typed: string; rest: string } | { kind: 'item'; item: MusicItem };
 
 /**
  * The centred search field and its suggestions (report §6): a pill field, and
- * a glass dropdown of completions, then artist, album and song suggestions.
- * Arrow keys move through it; Enter picks; Escape closes.
+ * a glass dropdown prioritising playable song suggestions first, then other
+ * entities and query completions. Arrow keys move through it; Enter picks; Escape closes.
  */
-export function SearchField({ initial, onSearch }: { initial: string; onSearch: (query: string) => void }) {
+export function SearchField({
+  initial,
+  onSearch,
+  autoFocus = false,
+  fullScreen = false,
+  dropdownClassName,
+  onEscape,
+  onPickOption,
+}: {
+  initial: string;
+  onSearch: (query: string) => void;
+  autoFocus?: boolean;
+  fullScreen?: boolean;
+  dropdownClassName?: string;
+  onEscape?: () => void;
+  onPickOption?: (kind: 'query' | 'route' | 'track') => void;
+}) {
   const [value, setValue] = useState(initial);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
@@ -23,6 +40,7 @@ export function SearchField({ initial, onSearch }: { initial: string; onSearch: 
   const listId = useId();
   const navigate = useNavigate();
   const suggestions = useSuggestions(open ? value : '');
+  const shortcutLabel = searchShortcutHint();
   // A suggestion's track menu takes focus when it opens (Menu focuses its
   // first item), which would otherwise read as the field blurring and close
   // the dropdown under the open menu. While a menu is open the blur close is
@@ -36,29 +54,38 @@ export function SearchField({ initial, onSearch }: { initial: string; onSearch: 
   }, []);
 
   useEffect(() => setValue(initial), [initial]);
+  useEffect(() => {
+    if (autoFocus) input.current?.focus();
+  }, [autoFocus]);
 
-  const options: Option[] = [
-    ...(suggestions.data?.queries ?? []).map((q) => ({ kind: 'query' as const, ...q })),
-    ...(suggestions.data?.items ?? []).map((item) => ({ kind: 'item' as const, item })),
-  ];
+  const options = buildSuggestionOptions(suggestions.data);
   const showList = open && value.trim().length > 0 && options.length > 0;
 
-  const pick = (option: Option | undefined) => {
+  const pick = (option: SearchOption | undefined) => {
     if (menuOpen.current) return;
     setOpen(false);
     setActive(-1);
-    if (!option) return onSearch(value.trim());
+    if (!option) {
+      onPickOption?.('query');
+      return onSearch(value.trim());
+    }
     if (option.kind === 'query') {
       setValue(option.text);
+      onPickOption?.('query');
       return onSearch(option.text);
     }
     const href = hrefFor(option.item);
-    if (href) navigate(href);
-    else playTrack(option.item);
+    if (href) {
+      onPickOption?.('route');
+      navigate(href);
+    } else {
+      playTrack(option.item);
+      onPickOption?.('track');
+    }
   };
 
   return (
-    <div className="relative w-[min(492px,100%)]">
+    <div className={fullScreen ? 'relative w-full' : 'relative w-[min(492px,100%)]'}>
       <form
         className="relative flex items-center"
         role="search"
@@ -70,7 +97,10 @@ export function SearchField({ initial, onSearch }: { initial: string; onSearch: 
         <Search size={15} strokeWidth={2.4} className="pointer-events-none absolute left-2.5 text-secondary" aria-hidden="true" />
         <input
           ref={input}
-          className="h-[38px] w-full rounded-pill border border-search-border bg-page pt-1.5 pr-[30px] pb-[5px] pl-7 type-body text-primary placeholder:text-tertiary [&::-webkit-search-cancel-button]:hidden"
+          data-music-search="true"
+          data-fullscreen-search={fullScreen ? 'true' : undefined}
+          aria-keyshortcuts="Control+k Meta+k"
+          className={`h-[38px] w-full rounded-pill border border-search-border bg-page pt-1.5 pb-[5px] pl-7 type-body text-primary placeholder:text-tertiary [&::-webkit-search-cancel-button]:hidden ${value ? 'pr-[30px]' : 'pr-[30px] sm:pr-[64px]'}`}
           type="search"
           value={value}
           placeholder="Artists, Songs, Lyrics, and More"
@@ -96,10 +126,23 @@ export function SearchField({ initial, onSearch }: { initial: string; onSearch: 
               e.preventDefault();
               setActive((i) => Math.max(i - 1, -1));
             } else if (e.key === 'Escape') {
+              e.preventDefault();
+              e.stopPropagation();
               setOpen(false);
+              setActive(-1);
+              input.current?.blur();
+              onEscape?.();
             }
           }}
         />
+        {!value && (
+          <kbd
+            aria-hidden="true"
+            className="pointer-events-none absolute right-2.5 hidden select-none items-center rounded-[5px] border border-search-border bg-quinary px-1.5 py-0.5 font-sans text-[11px] leading-none font-medium text-tertiary sm:inline-flex"
+          >
+            {shortcutLabel}
+          </kbd>
+        )}
         {value && (
           <button
             type="button"
@@ -115,58 +158,30 @@ export function SearchField({ initial, onSearch }: { initial: string; onSearch: 
         )}
       </form>
       {showList && (
-        // The dropdown: 302px of glass, 3px under the field.
+        // The dropdown: glass suggestions starting with playable songs, then query completions below.
         <ul
           id={listId}
-          className="absolute top-[calc(100%+3px)] left-0 z-(--z-contextual-menus) max-h-[min(700px,70vh)] w-[302px] overflow-y-auto rounded-[9px] border border-[#00000033] bg-thick-material py-1.5 shadow-[inset_0_0_0_1px_#ffffff33,0_8px_40px_#0000008c] [backdrop-filter:blur(60px)_saturate(2.2)]"
+          className={`absolute top-[calc(100%+3px)] left-0 z-(--z-contextual-menus) max-h-[min(700px,70vh)] ${dropdownClassName ?? 'w-[min(360px,100%)]'} overflow-y-auto rounded-[9px] border border-[#00000033] bg-thick-material py-1.5 shadow-[inset_0_0_0_1px_#ffffff33,0_8px_40px_#0000008c] [backdrop-filter:blur(60px)_saturate(2.2)]`}
           role="listbox"
         >
           {options.map((option, i) => {
-            const item = option.kind === 'item' ? option.item : null;
-            const playable = item !== null && (item.kind === 'song' || item.kind === 'video');
+            const prev = i > 0 ? options[i - 1] : undefined;
+            const startsQueriesAfterItems = option.kind === 'query' && prev?.kind === 'item';
+            const key = option.kind === 'query' ? `q-${option.text}-${i}` : `i-${option.item.kind}-${option.item.id}-${i}`;
             return (
-            <li
-              key={option.kind === 'query' ? `q-${option.text}` : `i-${option.item.id}`}
-              id={`${listId}-${i}`}
-              role="option"
-              aria-selected={i === active}
-              className={option.kind === 'query' ? hint : `${lockup} ${playable ? lockupMenuCols : lockupCols}`}
-              data-active={i === active || undefined}
-              onMouseDown={(e) => e.preventDefault()}
-              onMouseEnter={() => setActive(i)}
-              onClick={() => pick(option)}
-            >
-              {option.kind === 'query' ? (
-                <>
-                  <Search size={13} strokeWidth={2.4} aria-hidden="true" />
-                  <span className="truncate">
-                    <span className="text-primary group-data-active/option:text-white">{option.typed}</span>
-                    <span>{option.rest}</span>
-                  </span>
-                </>
-              ) : (
-                <>
-                  <div className="w-[46px]">
-                    <Artwork
-                      src={option.item.thumbnail}
-                      displayWidth={46}
-                      radius={option.item.kind === 'artist' ? '50%' : 'var(--radius-artwork-small)'}
-                    />
-                  </div>
-                  <div className="flex min-w-0 flex-col">
-                    <span className="truncate type-body">{option.item.title}</span>
-                    <span className="mt-px truncate type-callout text-secondary group-data-active/option:text-white">{option.item.subtitle || kindLabel(option.item.kind)}</span>
-                  </div>
-                  {playable && item && (
-                    <TrackMenu
-                      track={toTrack(item)}
-                      onOpenChange={onMenuOpenChange}
-                      className="grid size-7 place-items-center rounded-full text-secondary opacity-0 transition-opacity duration-100 ease-in group-hover/option:opacity-100 group-data-active/option:text-white focus-visible:opacity-100 hover:bg-quinary group-data-active/option:hover:bg-white/20 data-open:opacity-100"
-                    />
-                  )}
-                </>
-              )}
-            </li>
+              <Fragment key={key}>
+                {startsQueriesAfterItems && (
+                  <li role="presentation" aria-hidden="true" className="mx-2.5 my-1.5 h-px bg-search-border" />
+                )}
+                <SuggestionOptionRow
+                  id={`${listId}-${i}`}
+                  option={option}
+                  isActive={i === active}
+                  onHover={() => setActive(i)}
+                  onPick={() => pick(option)}
+                  onMenuOpenChange={onMenuOpenChange}
+                />
+              </Fragment>
             );
           })}
         </ul>
@@ -175,10 +190,76 @@ export function SearchField({ initial, onSearch }: { initial: string; onSearch: 
   );
 }
 
+function SuggestionOptionRow({
+  id,
+  option,
+  isActive,
+  onHover,
+  onPick,
+  onMenuOpenChange,
+}: {
+  id: string;
+  option: SearchOption;
+  isActive: boolean;
+  onHover: () => void;
+  onPick: () => void;
+  onMenuOpenChange: (open: boolean) => void;
+}) {
+  const menu = useContextMenu();
+  const item = option.kind === 'item' ? option.item : null;
+  const playable = item !== null && (item.kind === 'song' || item.kind === 'video');
+
+  return (
+    <li
+      id={id}
+      role="option"
+      aria-selected={isActive}
+      className={option.kind === 'query' ? hint : `${lockup} ${playable ? lockupMenuCols : lockupCols}`}
+      data-active={isActive || undefined}
+      onMouseDown={(e) => e.preventDefault()}
+      onMouseEnter={onHover}
+      onClick={onPick}
+      onContextMenu={playable ? menu.openAtEvent : undefined}
+    >
+      {option.kind === 'query' ? (
+        <>
+          <Search size={13} strokeWidth={2.4} aria-hidden="true" />
+          <span className="truncate">
+            <span className="text-primary group-data-active/option:text-white">{option.typed}</span>
+            <span>{option.rest}</span>
+          </span>
+        </>
+      ) : (
+        <>
+          <div className="w-[46px]">
+            <Artwork
+              src={option.item.thumbnail}
+              displayWidth={46}
+              radius={option.item.kind === 'artist' ? '50%' : 'var(--radius-artwork-small)'}
+            />
+          </div>
+          <div className="flex min-w-0 flex-col">
+            <span className="truncate type-body">{option.item.title}</span>
+            <span className="mt-px truncate type-callout text-secondary group-data-active/option:text-white">{option.item.subtitle || kindLabel(option.item.kind)}</span>
+          </div>
+          {playable && item && (
+            <TrackMenu
+              track={toTrack(item)}
+              menu={menu}
+              onOpenChange={onMenuOpenChange}
+              className="grid size-7 place-items-center rounded-full text-secondary opacity-0 transition-opacity duration-100 ease-in group-hover/option:opacity-100 group-data-active/option:text-white focus-visible:opacity-100 hover:bg-quinary group-data-active/option:hover:bg-white/20 data-open:opacity-100"
+            />
+          )}
+        </>
+      )}
+    </li>
+  );
+}
+
 // A suggestion row; hover or keyboard selection paints it in the key colour, white text.
 const optionRow = 'group/option mx-1.5 cursor-default rounded-[3px] data-active:bg-key-bg data-active:text-white';
-const hint = `${optionRow} grid grid-cols-[16px_minmax(0,1fr)] items-center p-1 type-body text-secondary`;
-const lockup = `${optionRow} mt-1.5 grid items-center gap-x-2.5 p-1.5`;
+const hint = `${optionRow} grid grid-cols-[16px_minmax(0,1fr)] items-center gap-x-1.5 px-2 py-1 type-body text-secondary`;
+const lockup = `${optionRow} mt-0.5 first:mt-0 grid items-center gap-x-2.5 p-1.5`;
 const lockupCols = 'grid-cols-[46px_minmax(0,1fr)]';
 const lockupMenuCols = 'grid-cols-[46px_minmax(0,1fr)_auto]';
 

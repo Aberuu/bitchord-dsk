@@ -42,6 +42,7 @@
   --animate-zoom: zoom 0.2s ease-out;
   --animate-fade-in: fade-in 0.4s ease;
   --animate-enter: enter 0.3s var(--ease-out-panel);
+  --animate-exit: exit 0.24s var(--ease-out-panel) forwards;
   --animate-morph: morph 0.32s var(--ease-out-panel);
   --animate-spin: spin 1s linear infinite;
   --animate-shimmer: shimmer 1.6s ease-in-out infinite;
@@ -77,6 +78,24 @@
     from {
       opacity: 0;
       transform: scale(1.02);
+    }
+  }
+  @keyframes exit {
+    from {
+      opacity: 1;
+      transform: scale(1);
+    }
+    to {
+      opacity: 0;
+      transform: scale(1.02);
+    }
+  }
+  @keyframes fade-out {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
     }
   }
   /* One label melting into the next, as the quality switcher's text changes. */
@@ -244,6 +263,42 @@
     background-color: var(--glassMaterialBackground);
     backdrop-filter: saturate(2.2) blur(16px);
     box-shadow: 0 10px 40px var(--glassMaterialShadowColor);
+  }
+
+  &::after {
+    box-shadow:
+      inset 0.5px 0.5px 0 var(--glassMaterialInnerStroke),
+      inset 0.5px -0.5px 0 var(--glassMaterialInnerStroke),
+      inset -0.5px 0.5px 0 var(--glassMaterialInnerStroke),
+      inset -0.5px -0.5px 0 var(--glassMaterialInnerStroke);
+    opacity: var(--glassMaterialInnerStrokeAlpha);
+  }
+}
+
+/* Contextual menus (right-click & 3-dot): Liquid Glass layers matching glass-pill. */
+@utility glass-menu {
+  isolation: isolate;
+
+  &::before,
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+  }
+
+  &::before {
+    z-index: -1;
+    background:
+      linear-gradient(180deg, rgb(255 255 255 / 0.14) 0%, rgb(255 255 255 / 0) 44%),
+      var(--glassMaterialBackground);
+    backdrop-filter: saturate(2.2) blur(24px);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.24),
+      0 0 0 0.5px var(--vibrantDivider),
+      0 16px 42px var(--dialogShadowColor),
+      0 4px 12px var(--glassMaterialShadowColor);
   }
 
   &::after {

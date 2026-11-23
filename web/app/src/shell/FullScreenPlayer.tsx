@@ -1,6 +1,6 @@
-import { Cast, Maximize, Minimize, Volume1, Volume2, X } from 'lucide-react';
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { useLocation } from 'react-router';
+import { Cast, Maximize, Minimize, Search, Volume1, Volume2, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useLocation, useNavigate } from 'react-router';
 import { LogoMark } from '@/components/icons/LogoMark';
 import {
   BackwardIcon,
@@ -16,6 +16,7 @@ import {
 } from '@/components/icons/Transport';
 import { ExplicitBadge } from '@/components/music/ExplicitBadge';
 import { FavoriteButton } from '@/components/music/FavoriteButton';
+import { SearchField } from '@/components/music/SearchField';
 import { TrackMenu } from '@/components/music/TrackMenu';
 import { albumHref } from '@/components/music/links';
 import { MotionArtwork } from '@/components/music/MotionArtwork';
@@ -155,7 +156,14 @@ const chrome = `absolute z-1 ${chromeButton}`;
 const artworkLayer = 'absolute inset-0 size-full rounded-[inherit] object-cover opacity-0 transition-opacity duration-300 ease-in';
 const IDLE_MS = 3000;
 
-export function FullScreenPlayer() {
+export function FullScreenPlayer({
+  exiting = false,
+  onExited,
+}: {
+  exiting?: boolean;
+  onExited?: () => void;
+} = {}) {
+  const navigate = useNavigate();
   const nowPlaying = usePlayer((s) => s.nowPlaying);
   const entry = usePlayer((s) => {
     const row = s.queue[s.index];
@@ -169,6 +177,8 @@ export function FullScreenPlayer() {
   const openedAt = useRef(pathname);
   const playing = usePlayer((s) => s.status === 'playing' || s.status === 'buffering');
   const setFullScreen = useUi((s) => s.setFullScreen);
+  const fullScreenSearchOpen = useUi((s) => s.fullScreenSearchOpen);
+  const setFullScreenSearchOpen = useUi((s) => s.setFullScreenSearchOpen);
   const setAudioOutputOpen = useUi((s) => s.setAudioOutputOpen);
   const pipeline = useAudioPipeline();
   const video = useHasVideo(nowPlaying?.videoId);
@@ -180,8 +190,16 @@ export function FullScreenPlayer() {
   const [idle, setIdle] = useState(false);
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const browserFullScreen = useBrowserFullScreen();
+  const rootRef = useRef<HTMLDivElement>(null);
   const close = useRef<HTMLButtonElement>(null);
   const enteredBrowserFullScreen = useRef(false);
+  const exitNotified = useRef(false);
+
+  const notifyExited = useCallback(() => {
+    if (exitNotified.current) return;
+    exitNotified.current = true;
+    onExited?.();
+  }, [onExited]);
 
   const showLyrics = panel === 'lyrics';
   const showQueue = panel === 'queue';
@@ -220,8 +238,22 @@ export function FullScreenPlayer() {
   }, [pathname, setFullScreen]);
 
   useEffect(() => {
-    if (!nowPlaying) setFullScreen(false);
-  }, [nowPlaying, setFullScreen]);
+    if (!nowPlaying) {
+      setFullScreen(false);
+      notifyExited();
+    }
+  }, [nowPlaying, setFullScreen, notifyExited]);
+
+  useEffect(() => {
+    if (!exiting) {
+      exitNotified.current = false;
+      return;
+    }
+    const active = document.activeElement as HTMLElement | null;
+    if (active && rootRef.current?.contains(active)) active.blur();
+    const timer = setTimeout(notifyExited, 260);
+    return () => clearTimeout(timer);
+  }, [exiting, notifyExited]);
 
   const toggleBrowserFullScreen = () => {
     if (document.fullscreenElement) {
@@ -239,17 +271,26 @@ export function FullScreenPlayer() {
   const album = track?.album ?? null;
   const column = showLyrics || showQueue;
   const theater = video && !column;
-  const hidden = theater && playing && idle ? ' pointer-events-none opacity-0' : '';
+  const hidden = theater && playing && idle && !fullScreenSearchOpen ? ' pointer-events-none opacity-0' : '';
   const corner = `${chrome} transition-[background-color,color,opacity] duration-300${hidden}`;
 
   return (
     <div
-      className="fixed inset-0 z-[calc(var(--z-contextual-menus)-2)] isolate flex flex-col animate-enter overflow-hidden text-primary [--art:min(32vw,calc(100dvh-390px),520px)] motion-reduce:[animation-name:fade-in] max-md:[--art:min(82vw,calc(100dvh-410px),360px)]"
+      ref={rootRef}
+      className={`fixed inset-0 z-[calc(var(--z-contextual-menus)-2)] isolate flex flex-col overflow-hidden text-primary [--art:min(32vw,calc(100dvh-390px),520px)] max-md:[--art:min(82vw,calc(100dvh-410px),360px)] ${
+        exiting
+          ? 'pointer-events-none animate-exit motion-reduce:[animation-name:fade-out]'
+          : 'animate-enter motion-reduce:[animation-name:fade-in]'
+      }`}
       role="dialog"
       aria-modal="true"
       aria-label="Now Playing"
       data-full-screen
+      data-exiting={exiting || undefined}
       data-paused={!playing || undefined}
+      onAnimationEnd={(e) => {
+        if (exiting && e.target === e.currentTarget) notifyExited();
+      }}
       onPointerMove={wake}
       onPointerDown={wake}
       onKeyDown={wake}
@@ -270,7 +311,7 @@ export function FullScreenPlayer() {
       <div className={`relative z-1 flex flex-none flex-col items-center pt-3.5 pb-1 transition-opacity duration-300${hidden}`}>
         <div className="h-1 w-9 rounded-full bg-white/30" aria-hidden="true" />
         {playingFrom && (
-          <p className="mt-1.5 max-w-[60vw] truncate type-caption-1 text-white/75">
+          <p className="mt-1.5 max-w-[min(60vw,calc(100vw-220px))] truncate type-caption-1 text-white/75">
             Playing from {playingFrom}
           </p>
         )}
@@ -278,6 +319,15 @@ export function FullScreenPlayer() {
 
       <button ref={close} className={`${corner} top-3.5 left-5`} aria-label="Close" onClick={() => setFullScreen(false)}>
         <X size={20} />
+      </button>
+      <button
+        type="button"
+        className={`${corner} top-3.5 left-16`}
+        aria-label="Search music"
+        title="Search (Ctrl+K)"
+        onClick={() => setFullScreenSearchOpen(true)}
+      >
+        <Search size={18} />
       </button>
       {video && (
         <VideoQuality className={`absolute top-[18px] z-1${hidden}${document.fullscreenEnabled ? ' right-16' : ' right-5'}`} />
@@ -290,6 +340,41 @@ export function FullScreenPlayer() {
         >
           {browserFullScreen ? <Minimize size={18} /> : <Maximize size={18} />}
         </button>
+      )}
+      {fullScreenSearchOpen && !exiting && (
+        <div
+          className="fixed inset-0 z-20 flex items-start justify-center bg-black/50 px-4 pt-[min(14vh,96px)] [backdrop-filter:blur(8px)]"
+          onMouseDown={(e) => {
+            if (e.target !== e.currentTarget) return;
+            setFullScreenSearchOpen(false);
+            close.current?.focus({ preventScroll: true });
+          }}
+        >
+          <div className="glass-menu w-[min(520px,100%)] rounded-[18px] p-3">
+            <SearchField
+              initial=""
+              autoFocus
+              fullScreen
+              dropdownClassName="w-full"
+              onSearch={(q) => {
+                const trimmed = q.trim();
+                if (!trimmed) return;
+                setFullScreenSearchOpen(false);
+                setFullScreen(false);
+                void navigate(`/search?q=${encodeURIComponent(trimmed)}`);
+              }}
+              onPickOption={(kind) => {
+                setFullScreenSearchOpen(false);
+                if (kind === 'track') close.current?.focus({ preventScroll: true });
+                else setFullScreen(false);
+              }}
+              onEscape={() => {
+                setFullScreenSearchOpen(false);
+                close.current?.focus({ preventScroll: true });
+              }}
+            />
+          </div>
+        </div>
       )}
 
       {/* Main layout: Sleeve + Controls on left, Synced Lyrics or Up Next on right */}

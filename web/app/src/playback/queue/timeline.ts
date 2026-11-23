@@ -256,3 +256,113 @@ export function autoplaySectionStart(tiers: readonly QueueTier[], currentIndex: 
   for (let i = after; i < tiers.length; i++) if (tiers[i] === 'autoplay') return i;
   return tiers.length;
 }
+
+export type QueueSection = 'upnext' | 'autoplay';
+
+export interface QueueRowBox {
+  at: number;
+  section: QueueSection;
+  top: number;
+  bottom: number;
+}
+
+export interface QueueDropTarget {
+  to: number;
+  indicatorAt: number;
+  edge: 'top' | 'bottom';
+  section: QueueSection;
+}
+
+/** Reorders an upcoming entry after [currentIndex], updating its tier if it crosses between Up Next and AutoPlay. */
+export function moveUpcomingEntry(
+  timeline: readonly QueueEntry[],
+  currentIndex: number,
+  from: number,
+  to: number,
+  targetSection?: QueueSection,
+): QueueEntry[] | null {
+  if (from <= currentIndex || to <= currentIndex || from >= timeline.length || to >= timeline.length) return null;
+  const next = [...timeline];
+  const [entry] = next.splice(from, 1);
+  if (!entry) return null;
+
+  const remainingAutoplayAt = autoplaySectionStart(
+    next.map((e) => e.tier),
+    currentIndex,
+  );
+  let nextTier: QueueTier = entry.tier;
+  if (targetSection === 'upnext') {
+    if (entry.tier === 'autoplay') nextTier = 'user';
+  } else if (targetSection === 'autoplay') {
+    nextTier = 'autoplay';
+  } else if (entry.tier === 'autoplay' && to < remainingAutoplayAt) {
+    nextTier = 'user';
+  } else if (entry.tier !== 'autoplay' && to > remainingAutoplayAt) {
+    nextTier = 'autoplay';
+  }
+
+  if (from === to && nextTier === entry.tier) return null;
+  next.splice(to, 0, nextTier === entry.tier ? entry : { ...entry, tier: nextTier });
+  return next;
+}
+
+/** Resolves which queue slot and visual edge correspond to a pointer Y coordinate over visible upcoming rows. */
+export function resolveQueueDropTarget(
+  rows: readonly QueueRowBox[],
+  from: number,
+  clientY: number,
+): QueueDropTarget | null {
+  const dragged = rows.find((row) => row.at === from);
+  if (!dragged || rows.length === 0) return null;
+
+  let insertAt: number;
+  let indicatorAt: number;
+  let edge: 'top' | 'bottom';
+  let section: QueueSection;
+
+  const first = rows[0]!;
+  if (clientY < (first.top + first.bottom) / 2) {
+    insertAt = first.at;
+    indicatorAt = first.at;
+    edge = 'top';
+    section = first.section;
+  } else {
+    let matched = false;
+    insertAt = rows[rows.length - 1]!.at + 1;
+    indicatorAt = rows[rows.length - 1]!.at;
+    edge = 'bottom';
+    section = rows[rows.length - 1]!.section;
+
+    for (let i = 0; i < rows.length - 1; i++) {
+      const prev = rows[i]!;
+      const next = rows[i + 1]!;
+      const nextMid = (next.top + next.bottom) / 2;
+      if (clientY < nextMid) {
+        if (prev.section !== next.section && clientY < next.top) {
+          insertAt = prev.at + 1;
+          indicatorAt = prev.at;
+          edge = 'bottom';
+          section = prev.section;
+        } else {
+          insertAt = next.at;
+          indicatorAt = next.at;
+          edge = 'top';
+          section = next.section;
+        }
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      const last = rows[rows.length - 1]!;
+      insertAt = last.at + 1;
+      indicatorAt = last.at;
+      edge = 'bottom';
+      section = last.section;
+    }
+  }
+
+  const to = from < insertAt ? insertAt - 1 : insertAt;
+  if (to === from && section === dragged.section) return null;
+  return { to, indicatorAt, edge, section };
+}

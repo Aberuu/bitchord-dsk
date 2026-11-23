@@ -12,6 +12,7 @@ import {
   BACK_RESTARTS_AFTER_SEC,
   buildContextQueue,
   buildOneOffQueue,
+  moveUpcomingEntry,
   playedUserQueueIndices,
   sectionedOrder,
   shuffledStartingOrder,
@@ -19,6 +20,7 @@ import {
   upcomingUserQueueIndices,
   userQueueInsertionIndex,
   type QueueEntry,
+  type QueueSection,
   type QueueSource,
 } from '@/playback/queue/timeline';
 import { trackLog } from '@/playback/trackLog';
@@ -108,7 +110,7 @@ interface PlayerState extends Settings {
   jumpTo: (index: number) => void;
   removeAt: (index: number) => void;
   /** Moves an upcoming row; both indices are into [queue] and after the playing one. */
-  move: (from: number, to: number) => void;
+  move: (from: number, to: number, targetSection?: QueueSection) => void;
   /** "Clear": the upcoming hand-queued tracks. The album or playlist and AutoPlay stay. */
   clearUpNext: () => void;
   next: () => void;
@@ -614,12 +616,10 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
     intent();
   },
 
-  move(from, to) {
+  move(from, to, targetSection) {
     const { queue, index } = get();
-    if (from <= index || to <= index || from >= queue.length || to >= queue.length || from === to) return;
-    const next = [...queue];
-    const [entry] = next.splice(from, 1);
-    next.splice(to, 0, entry!);
+    const next = moveUpcomingEntry(queue, index, from, to, targetSection);
+    if (!next) return;
     set({ queue: next });
     intent();
   },

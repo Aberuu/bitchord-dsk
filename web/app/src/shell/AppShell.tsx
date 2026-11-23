@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { Outlet } from 'react-router';
 import { PrefetchLink } from '@/components/PrefetchLink';
 import { config } from '@/config';
@@ -46,6 +46,13 @@ export function AppShell() {
   const bannerDismissed = useUi((s) => s.installBannerDismissed);
   const dismissBanner = useUi((s) => s.dismissInstallBanner);
   const fullScreen = useUi((s) => s.fullScreen);
+  const [fullScreenMounted, setFullScreenMounted] = useState(fullScreen);
+  useEffect(() => {
+    if (fullScreen) setFullScreenMounted(true);
+  }, [fullScreen]);
+  const handleFullScreenExited = useCallback(() => {
+    if (!useUi.getState().fullScreen) setFullScreenMounted(false);
+  }, []);
 
   let banner = null;
   if (!desktop && mobile) {
@@ -94,9 +101,9 @@ export function AppShell() {
         <SidePanel />
       </div>
       {banner}
-      {fullScreen && (
+      {fullScreenMounted && (
         <Suspense fallback={null}>
-          <FullScreenPlayer />
+          <FullScreenPlayer exiting={!fullScreen} onExited={handleFullScreenExited} />
         </Suspense>
       )}
       <AudioOutputModal />

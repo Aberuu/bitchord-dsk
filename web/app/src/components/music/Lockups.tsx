@@ -1,3 +1,4 @@
+import { useContextMenu } from '@/components/contextMenu';
 import { PrefetchLink } from '@/components/PrefetchLink';
 import { PlayIcon } from '@/components/icons/Transport';
 import type { MusicItem } from '@/data/music/types';
@@ -60,22 +61,31 @@ function PlayPlatter({ item }: { item: MusicItem }) {
 /** The artwork with its hover scrim, linking to the item or playing it. */
 function LockupArtwork({ item, width, aspect }: { item: MusicItem; width: number; aspect: number }) {
   const href = hrefFor(item);
+  const playable = isPlayable(item);
+  const menu = useContextMenu();
   return (
-    <div className="group/art relative rounded-artwork-md">
-      <Artwork src={item.thumbnail} displayWidth={width} aspect={aspect} radius="var(--radius-artwork-medium)" />
+    <div
+      className="group/art relative overflow-hidden rounded-artwork-md"
+      data-open={menu.isOpen || undefined}
+      onContextMenu={playable ? menu.openAtEvent : undefined}
+    >
+      <div className="transition-transform duration-200 ease-out group-hover/art:scale-[1.02]">
+        <Artwork src={item.thumbnail} displayWidth={width} aspect={aspect} radius="var(--radius-artwork-medium)" />
+      </div>
       {href ? (
         <PrefetchLink to={href} className={overlayLink} aria-label={item.title} />
       ) : (
         <button className={overlayLink} aria-label={`Play ${item.title}`} onClick={() => playTrack(item)} />
       )}
       {/* Hover scrim and platter (report §2: --lockupHoverBGColor, opacity .1s ease-in). */}
-      <div className="pointer-events-none absolute inset-0 z-2 rounded-[inherit] bg-lockup-hover opacity-0 transition-opacity duration-100 ease-in group-focus-visible/art:opacity-100 group-hover/art:opacity-100">{isPlayable(item) && <PlayPlatter item={item} />}</div>
+      <div className="pointer-events-none absolute inset-0 z-2 rounded-[inherit] bg-lockup-hover opacity-0 transition-opacity duration-100 ease-in group-focus-visible/art:opacity-100 group-hover/art:opacity-100 group-data-open/art:opacity-100">{playable && <PlayPlatter item={item} />}</div>
       {/* The track menu (report §14) for playable items: top-right, the
           platter's counterpart in the same glass, revealed with the scrim
           and held visible while its menu is open. */}
-      {isPlayable(item) && (
+      {playable && (
         <TrackMenu
           track={toTrack(item)}
+          menu={menu}
           className="absolute top-2 right-2 z-3 grid size-7 place-items-center rounded-full bg-thin-material text-white opacity-0 transition-opacity duration-100 ease-in [backdrop-filter:saturate(180%)_blur(60px)] group-hover/art:opacity-100 focus-visible:opacity-100 hover:bg-key-bg data-open:opacity-100"
         />
       )}
@@ -137,11 +147,19 @@ export function CircleLockup({ item, width = 160 }: { item: MusicItem; width?: n
 /** A song row inside a shelf (report §2, track lockup): 40px art, title, byline. */
 export function TrackLockup({ item, onPlay }: { item: MusicItem; onPlay?: () => void }) {
   const play = onPlay ?? (() => playTrack(item));
+  const playable = isPlayable(item);
+  const menu = useContextMenu();
   return (
     // 52px art column (40 + 12 gap), content, menu; 55px tall.
-    <div className="group/track grid h-[55px] grid-cols-[40px_minmax(0,1fr)_auto] items-center gap-x-3 py-[7.5px] pr-3.5 pl-0">
-      <button className="group/art relative w-10 rounded-artwork-sm" aria-label={`Play ${item.title}`} onClick={play}>
-        <Artwork src={item.thumbnail} displayWidth={40} radius="var(--radius-artwork-small)" />
+    <div
+      className="group/track grid h-[55px] grid-cols-[40px_minmax(0,1fr)_auto] items-center gap-x-3 rounded-row px-1.5 transition-colors duration-150 ease-out hover:bg-tracklist-hover data-open:bg-tracklist-hover"
+      data-open={menu.isOpen || undefined}
+      onContextMenu={playable ? menu.openAtEvent : undefined}
+    >
+      <button className="group/art relative w-10 overflow-hidden rounded-artwork-sm" aria-label={`Play ${item.title}`} onClick={play}>
+        <div className="transition-transform duration-150 ease-out group-hover/track:scale-[1.03]">
+          <Artwork src={item.thumbnail} displayWidth={40} radius="var(--radius-artwork-small)" />
+        </div>
         <span
           className="absolute inset-0 grid place-items-center rounded-[inherit] bg-lockup-hover text-white opacity-0 transition-opacity duration-100 ease-in group-hover/track:opacity-100 group-focus-visible/art:opacity-100"
           aria-hidden="true"
@@ -163,9 +181,10 @@ export function TrackLockup({ item, onPlay }: { item: MusicItem; onPlay?: () => 
       {/* The track row's ⋯ (report §14), at the card's end: revealed on hover
           or focus, and held visible while its menu is open. The space is
           always reserved so the title doesn't jump when it appears. */}
-      {isPlayable(item) && (
+      {playable && (
         <TrackMenu
           track={toTrack(item)}
+          menu={menu}
           className="grid size-7 place-items-center rounded-full text-key opacity-0 transition-opacity duration-100 ease-in group-hover/track:opacity-100 focus-visible:opacity-100 hover:bg-quinary data-open:opacity-100"
         />
       )}
