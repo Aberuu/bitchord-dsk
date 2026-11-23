@@ -52,15 +52,17 @@ describe('TitleBar, SearchField borders, and OLED black dark theme tokens', () =
     host.remove();
   });
 
-  it('renders TitleBar without a top divider line and matches sidebar glass + page canvas fills', () => {
+  it('renders TitleBar as a transparent overlay with no divider border or surface split', () => {
     act(() => {
       root.render(<TitleBar />);
     });
 
     const header = host.querySelector('header')!;
+    expect(header.className).toContain('absolute');
+    expect(header.className).toContain('bg-transparent');
     expect(header.className).not.toContain('border-b');
-    expect(header.querySelector('.glass-material')).toBeTruthy();
-    expect(header.innerHTML).toContain('bg-(--scrollablePageBG)');
+    expect(header.querySelector('.glass-material')).toBeNull();
+    expect(header.innerHTML).not.toContain('bg-(--scrollablePageBG)');
   });
 
   it('returns null for TitleBar outside Tauri desktop', () => {

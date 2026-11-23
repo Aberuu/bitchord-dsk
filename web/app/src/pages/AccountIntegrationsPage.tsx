@@ -132,7 +132,7 @@ function ScrobblingSection() {
         </div>
 
         <form
-          className="flex flex-col gap-2.5 px-4 py-3 hairline-[16px]"
+          className="relative flex flex-col gap-2.5 px-4 py-3 hairline-[16px]"
           onSubmit={(e) => {
             e.preventDefault();
             save.mutate({

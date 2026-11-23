@@ -92,7 +92,7 @@ function FolderLinkRow({ to, icon, title, subtitle }: FolderLinkRowProps) {
   return (
     <PrefetchLink
       to={to}
-      className="flex min-h-[54px] items-center gap-4 px-4 py-2.5 transition-colors hover:bg-tracklist-hover hairline-[56px]"
+      className="relative flex min-h-[54px] items-center gap-4 px-4 py-2.5 transition-colors hover:bg-tracklist-hover hairline-[56px]"
     >
       <span className="grid size-6 flex-none place-items-center text-key">{icon}</span>
       <span className="flex min-w-0 flex-1 flex-col">
@@ -518,7 +518,7 @@ export default function LibraryOverviewPage() {
                       key={`${artist.title}-${idx}`}
                       type="button"
                       onClick={() => handleOpenArtist(artist)}
-                      className="flex w-full items-center gap-3 px-4 py-2.5 text-start transition-colors hover:bg-tracklist-hover hairline-[56px]"
+                      className="relative flex w-full items-center gap-3 px-4 py-2.5 text-start transition-colors hover:bg-tracklist-hover hairline-[56px]"
                     >
                       <RankBadge rank={idx + 1} />
                       <RankedArtwork url={artist.artworkUrl} title={artist.title} circular />
@@ -550,7 +550,7 @@ export default function LibraryOverviewPage() {
                       key={`${album.title}-${idx}`}
                       type="button"
                       onClick={() => handleOpenAlbum(album)}
-                      className="flex w-full items-center gap-3 px-4 py-2.5 text-start transition-colors hover:bg-tracklist-hover hairline-[56px]"
+                      className="relative flex w-full items-center gap-3 px-4 py-2.5 text-start transition-colors hover:bg-tracklist-hover hairline-[56px]"
                     >
                       <RankBadge rank={idx + 1} />
                       <RankedArtwork url={album.artworkUrl} title={album.title} />

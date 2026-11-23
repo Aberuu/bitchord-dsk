@@ -83,22 +83,31 @@ export function AppShell() {
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <TitleBar />
-      <div className="relative min-h-0 flex-1 overflow-hidden">
+    <div className="relative isolate flex h-full flex-col">
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        {/* Continuous backdrop spans y=0..100% behind TitleBar and main to avoid a subpixel DPI seam over transparent Mica. */}
+        <div
+          aria-hidden="true"
+          data-page-backdrop="true"
+          className="pointer-events-none absolute inset-y-0 right-0 left-(--web-navigation-width) -z-1 bg-(--scrollablePageBG) max-sm:left-0"
+        />
+        {desktop && <div className="h-9 flex-none" aria-hidden="true" />}
+        <div className="relative min-h-0 flex-1 overflow-hidden">
+          <MobileTopBar />
+          <main
+            id="scrollable-page"
+            className="absolute inset-0 overflow-x-hidden overflow-y-auto pl-(--web-navigation-width) [scrollbar-gutter:stable] data-tint:bg-(--page-tint) data-tint:transition-[background-color] data-tint:duration-300 data-tint:ease-in max-sm:pt-(--mobile-top-bar-height) max-sm:pl-0"
+          >
+            <div className="min-h-full pb-[calc(var(--player-pill-height)+var(--player-bottom-offset)+40px)] max-sm:pb-[156px]">
+              <Outlet />
+            </div>
+          </main>
+          <PlayerBar />
+          <MobileBottomChrome />
+          <SidePanel />
+        </div>
         <Sidebar />
-        <MobileTopBar />
-        <main
-          id="scrollable-page"
-          className="absolute inset-0 overflow-x-hidden overflow-y-auto pl-(--web-navigation-width) [scrollbar-gutter:stable] data-tint:bg-(--page-tint) data-tint:transition-[background-color] data-tint:duration-300 data-tint:ease-in max-sm:pt-(--mobile-top-bar-height) max-sm:pl-0"
-        >
-          <div className="min-h-full pb-[calc(var(--player-pill-height)+var(--player-bottom-offset)+40px)] max-sm:pb-[156px]">
-            <Outlet />
-          </div>
-        </main>
-        <PlayerBar />
-        <MobileBottomChrome />
-        <SidePanel />
+        <TitleBar />
       </div>
       {banner}
       {fullScreenMounted && (

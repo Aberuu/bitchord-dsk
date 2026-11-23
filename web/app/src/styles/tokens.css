@@ -305,8 +305,8 @@
   }
 }
 
-:root[data-vibrancy='mica'] #scrollable-page,
-:root[data-vibrancy='acrylic'] #scrollable-page {
+:root[data-vibrancy='mica'] [data-page-backdrop='true'],
+:root[data-vibrancy='acrylic'] [data-page-backdrop='true'] {
   background-color: var(--scrollablePageBG);
 }
 

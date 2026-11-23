@@ -2,6 +2,7 @@ import { Download, FileMusic, ListMusic, Settings, SlidersHorizontal } from 'luc
 import { useEffect } from 'react';
 import { PrefetchLink, PrefetchNavLink } from '@/components/PrefetchLink';
 import { LogoMark } from '@/components/icons/LogoMark';
+import { isTauriDesktop } from '@/desktop/tauriBridge';
 import {
   AlbumsIcon,
   AllPlaylistsIcon,
@@ -133,6 +134,7 @@ export function Sidebar() {
   const setDrawerOpen = useUi((s) => s.setDrawerOpen);
   const signedIn = useSignedIn();
   const spotifySignedIn = useSpotifySignedIn();
+  const desktop = isTauriDesktop();
   const close = () => setDrawerOpen(false);
 
   useEffect(() => {
@@ -151,7 +153,7 @@ export function Sidebar() {
         data-open={drawerOpen}
         aria-label="Main"
       >
-        <div className="mt-2 ml-2 flex h-16 items-center px-5">
+        <div className={`${desktop ? 'mt-11' : 'mt-2'} ml-2 flex h-16 items-center px-5`}>
           <PrefetchLink to="/home" className="inline-flex items-center gap-2 rounded-[6px]" aria-label="BitChord, Home" onClick={close}>
             <LogoMark size={22} className="text-primary" />
             <span className="type-[700_19px/24px] tracking-[-0.01em]">BitChord</span>

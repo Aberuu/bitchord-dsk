@@ -333,6 +333,8 @@
  * from the left by the value (to the text, past an icon).
  */
 @utility hairline-* {
+  position: relative;
+
   & + &::before {
     content: '';
     position: absolute;

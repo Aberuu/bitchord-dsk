@@ -376,7 +376,7 @@ export default function ReplayPage() {
                     key={`${song.videoId}-${idx}`}
                     type="button"
                     onClick={() => handlePlaySong(song)}
-                    className="flex w-full items-center gap-3 px-4 py-2.5 text-start transition-colors hover:bg-tracklist-hover hairline-[56px]"
+                    className="relative flex w-full items-center gap-3 px-4 py-2.5 text-start transition-colors hover:bg-tracklist-hover hairline-[56px]"
                   >
                     <RankBadge rank={idx + 1} />
                     <RankedArtwork url={song.artworkUrl} title={song.title} />
@@ -406,7 +406,7 @@ export default function ReplayPage() {
                       key={`${artist.title}-${idx}`}
                       type="button"
                       onClick={() => handleOpenArtist(artist)}
-                      className="flex w-full items-center gap-3 px-4 py-2.5 text-start transition-colors hover:bg-tracklist-hover hairline-[56px]"
+                      className="relative flex w-full items-center gap-3 px-4 py-2.5 text-start transition-colors hover:bg-tracklist-hover hairline-[56px]"
                     >
                       <RankBadge rank={idx + 1} />
                       <RankedArtwork url={artist.artworkUrl} title={artist.title} circular />
@@ -439,7 +439,7 @@ export default function ReplayPage() {
                       key={`${album.title}-${idx}`}
                       type="button"
                       onClick={() => handleOpenAlbum(album)}
-                      className="flex w-full items-center gap-3 px-4 py-2.5 text-start transition-colors hover:bg-tracklist-hover hairline-[56px]"
+                      className="relative flex w-full items-center gap-3 px-4 py-2.5 text-start transition-colors hover:bg-tracklist-hover hairline-[56px]"
                     >
                       <RankBadge rank={idx + 1} />
                       <RankedArtwork url={album.artworkUrl} title={album.title} />
