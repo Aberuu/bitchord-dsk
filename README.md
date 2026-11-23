@@ -4,7 +4,7 @@
 
 **A modern, lightweight YouTube Music desktop player for Windows, engineered with Rust and Tauri 2.**
 
-[![Release](https://img.shields.io/badge/Release-v0.1.0--beta.1-f59e0b?logo=github&logoColor=white)](https://github.com/Aberuu/bitchord-dsk/releases)
+[![Release](https://img.shields.io/badge/Release-v0.8.0--beta.808-f59e0b?logo=github&logoColor=white)](https://github.com/Aberuu/bitchord-dsk/releases)
 [![Status](https://img.shields.io/badge/Status-Beta%20Testing-blueviolet)]()
 [![Rust](https://img.shields.io/badge/Rust-2021%20Edition-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-v2-24C8D8?logo=tauri&logoColor=white)](https://tauri.app/)
@@ -17,7 +17,7 @@
 ---
 
 > [!WARNING]
-> ### 🧪 Beta Testing Notice (`v0.1.0-beta.1`)
+> ### 🧪 Beta Testing Notice (`v0.8.0-beta.808`)
 > **BitChord Desktop is currently in public Beta Testing.**
 > While the core playback pipeline, 10-band Web Audio EQ, audio device hotplugging, synced lyrics, listening analytics, and Windows shell integrations are functional, you may encounter occasional edge cases or visual quirks. Feedback, bug reports, and suggestions are welcome!
 
@@ -29,7 +29,7 @@
 
 ---
 
-## 🚦 Release & Feature Status (Beta v0.1.0-beta.1)
+## 🚦 Release & Feature Status (Beta v0.8.0-beta.808)
 
 | Feature | Status | Notes |
 |---|---|---|
@@ -255,7 +255,11 @@ src-tauri/target/release/bundle/nsis/
 
 ## 📦 Release History
 
-### `v0.1.0-beta.1` (Current - Beta Testing)
+### `v0.8.0-beta.808` (Current - Beta Testing)
+- **Audio & Playback:** Added Bit-Perfect bypass mode (disables Web Audio EQ & software volume for bit-exact DAC output), audio device hotplugging, and audio tap worklet.
+- **UI & Shell:** Added Developer Watermark, refined `TitleBar`, `AppShell`, `FullScreenPlayer`, and custom scrollbar styling.
+
+### `v0.1.0-beta.1`
 - Initial desktop pre-release for Windows.
 - Implemented Rust audio pipeline (`core-playback`), WASAPI low-latency output, audio device hotplugging, and 10-band Web Audio EQ.
 - Integrated synced lyrics (LRCLIB, Kugou, YouTube captions) with side panel & full-screen view.
