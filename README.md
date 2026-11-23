@@ -4,6 +4,8 @@
 
 **A modern, lightweight YouTube Music desktop player for Windows, engineered with Rust and Tauri 2.**
 
+[![Release](https://img.shields.io/badge/Release-v0.1.0--beta.1-f59e0b?logo=github&logoColor=white)](https://github.com/Aberuu/bitchord-dsk/releases)
+[![Status](https://img.shields.io/badge/Status-Beta%20Testing-blueviolet)]()
 [![Rust](https://img.shields.io/badge/Rust-2021%20Edition-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-v2-24C8D8?logo=tauri&logoColor=white)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-v19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
@@ -14,19 +16,43 @@
 
 ---
 
+> [!WARNING]
+> ### 🧪 Beta Testing Notice (`v0.1.0-beta.1`)
+> **BitChord Desktop is currently in public Beta Testing.**
+> While the core playback pipeline, 10-band Web Audio EQ, synced lyrics, listening analytics, and Windows shell integrations are functional, you may encounter occasional edge cases or visual quirks. Feedback, bug reports, and suggestions are welcome!
+
+---
+
 ## 🎵 Overview
 
 **BitChord Desktop** is a native Windows client for YouTube Music inspired by Apple Music's sleek aesthetics. Built using a modular **Rust workspace** and **Tauri 2**, it provides a responsive, standalone music experience without relying on browser tabs, heavy Electron wrappers, or JVM runtimes.
 
 ---
 
-## ✨ Features
+## 🚦 Release & Feature Status (Beta v0.1.0-beta.1)
+
+| Feature | Status | Notes |
+|---|---|---|
+| **Audio Playback Engine** | 🟢 Beta Ready | Low-latency Symphonia decoding + CPAL/WASAPI audio output |
+| **Web Audio 10-Band EQ** | 🟢 Beta Ready | 10 frequency bands, pre-amp control, and built-in genre presets |
+| **Audio Pipeline Inspector**| 🟢 Beta Ready | Real-time monitoring of sample rate, channels, bit depth, and buffer size |
+| **Synced Lyrics** | 🟢 Beta Ready | Side panel drawer & full-screen view (LRCLIB, Kugou, YouTube captions) |
+| **Windows SMTC Integration**| 🟢 Beta Ready | Hardware media keys, volume overlay, and taskbar thumbnail previews |
+| **Windows DPAPI Security** | 🟢 Beta Ready | Hardware-backed `CryptProtectData` encryption for YouTube session tokens |
+| **Listening Stats & Replay** | 🟢 Beta Ready | SQLite-backed listening tracker, top songs/artists, and Replay cards |
+| **Search & UpNext Queue** | 🟢 Beta Ready | Search options, shortcut quick-select, and dynamic queue timeline |
+| **Listen Together (Party)** | 🟡 In Testing | WebSocket party synchronization with server clock drift compensation |
+| **Offline Downloads** | ⚪ In Progress | Local audio storage with ID3 metadata embedding (Planned for v0.2.0) |
+
+---
+
+## ✨ Key Capabilities
 
 - **🚀 High-Performance Playback Pipeline**
   - Native audio decoding powered by [`symphonia`](https://github.com/pdeljanov/symphonia) (AAC, MP3, FLAC, Vorbis, Opus, WAV).
-  - Low-latency output stream via [`cpal`](https://github.com/RustAudio/cpal) and Windows WASAPI (shared & exclusive modes for audiophiles).
+  - Low-latency output stream via [`cpal`](https://github.com/RustAudio/cpal) and Windows WASAPI (shared & exclusive modes).
   - Bit-perfect streaming support with auto-dithering fallback.
-  - Dynamic audio pipeline dialog with live format inspection (Sample Rate, Bit Depth, Buffer size, Channels).
+  - Dynamic audio pipeline dialog with live format inspection.
 
 - **🎛️ 10-Band Graphic & Parametric EQ**
   - Interactive Web Audio equalizer with customizable band gains (-12 dB to +12 dB).
@@ -122,7 +148,7 @@ Ensure you have the following installed on your Windows machine:
    cargo tauri dev
    ```
 
-### Building for Production
+### Building for Production (Installer)
 
 To compile an optimized Windows `.msi` or `.exe` installer:
 
@@ -131,6 +157,18 @@ cargo tauri build
 ```
 
 The output bundle will be located at `src-tauri/target/release/bundle/`.
+
+---
+
+## 📦 Release History
+
+### `v0.1.0-beta.1` (Current - Beta Testing)
+- Initial desktop pre-release for Windows.
+- Implemented Rust audio pipeline (`core-playback`), WASAPI low-latency output, and 10-band Web Audio EQ.
+- Integrated synced lyrics (LRCLIB, Kugou, YouTube captions) with side panel & full-screen view.
+- Added Windows SMTC media transport keys and DPAPI credential protection.
+- Added SQLite listening tracker (`core-stats`) and interactive Replay cards.
+- Integrated search shortcut navigation, context menu system, and queue timeline.
 
 ---
 
