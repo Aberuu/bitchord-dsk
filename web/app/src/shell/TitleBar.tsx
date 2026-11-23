@@ -37,39 +37,49 @@ export function TitleBar() {
   const win = getCurrentWindow();
   return (
     <header
-      className="relative z-[calc(var(--z-web-chrome)+2)] flex h-9 flex-none items-center justify-end border-b border-divider/60 bg-transparent select-none"
+      className="relative z-[calc(var(--z-web-chrome)+2)] flex h-9 flex-none items-center bg-transparent select-none"
       data-tauri-drag-region
     >
-      <div className="h-full flex-1" data-tauri-drag-region onDoubleClick={() => void win.toggleMaximize()} />
-      <div className="flex h-full flex-none items-center">
-        <button
-          type="button"
-          className={captionBtn}
-          aria-label="Minimize window"
-          onClick={() => void win.minimize()}
-        >
-          <Minus size={14} strokeWidth={1.8} aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          className={captionBtn}
-          aria-label={maximized ? 'Restore window' : 'Maximize window'}
-          onClick={() => void win.toggleMaximize()}
-        >
-          {maximized ? (
-            <Copy size={12} strokeWidth={1.8} aria-hidden="true" />
-          ) : (
-            <Square size={12} strokeWidth={1.8} aria-hidden="true" />
-          )}
-        </button>
-        <button
-          type="button"
-          className="grid h-9 w-[46px] place-items-center text-secondary transition-colors duration-100 hover:bg-red hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-key"
-          aria-label="Close window"
-          onClick={() => void win.close()}
-        >
-          <X size={15} strokeWidth={1.8} aria-hidden="true" />
-        </button>
+      <div
+        className="hidden h-full w-(--web-navigation-width) flex-none glass-material sm:block"
+        data-tauri-drag-region
+        aria-hidden="true"
+      />
+      <div
+        className="flex h-full min-w-0 flex-1 items-center justify-end bg-(--scrollablePageBG)"
+        data-tauri-drag-region
+      >
+        <div className="h-full flex-1" data-tauri-drag-region onDoubleClick={() => void win.toggleMaximize()} />
+        <div className="flex h-full flex-none items-center">
+          <button
+            type="button"
+            className={captionBtn}
+            aria-label="Minimize window"
+            onClick={() => void win.minimize()}
+          >
+            <Minus size={14} strokeWidth={1.8} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className={captionBtn}
+            aria-label={maximized ? 'Restore window' : 'Maximize window'}
+            onClick={() => void win.toggleMaximize()}
+          >
+            {maximized ? (
+              <Copy size={12} strokeWidth={1.8} aria-hidden="true" />
+            ) : (
+              <Square size={12} strokeWidth={1.8} aria-hidden="true" />
+            )}
+          </button>
+          <button
+            type="button"
+            className="grid h-9 w-[46px] place-items-center text-secondary transition-colors duration-100 hover:bg-red hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-key"
+            aria-label="Close window"
+            onClick={() => void win.close()}
+          >
+            <X size={15} strokeWidth={1.8} aria-hidden="true" />
+          </button>
+        </div>
       </div>
     </header>
   );

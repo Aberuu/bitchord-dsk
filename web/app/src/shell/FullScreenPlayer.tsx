@@ -306,6 +306,13 @@ export function FullScreenPlayer({
           <VideoSurface fit="contain" className="size-full" />
         </div>
       )}
+      {theater && (
+        <div
+          aria-hidden="true"
+          data-theater-scrim="true"
+          className={`pointer-events-none absolute inset-x-0 bottom-0 z-0 h-[min(48vh,380px)] bg-[linear-gradient(to_top,rgb(0_0_0/0.82)_0%,rgb(0_0_0/0.46)_48%,rgb(0_0_0/0.14)_78%,transparent_100%)] transition-opacity duration-300${hidden}`}
+        />
+      )}
 
       {/* Top handle + Playing from caption matching Screenshot 5 */}
       <div className={`relative z-1 flex flex-none flex-col items-center pt-3.5 pb-1 transition-opacity duration-300${hidden}`}>
@@ -381,7 +388,7 @@ export function FullScreenPlayer({
       <div
         className={
           theater
-            ? `absolute inset-x-0 bottom-16 flex justify-center bg-[linear-gradient(to_top,rgb(0_0_0/0.72),rgb(0_0_0/0.35)_55%,transparent)] px-6 pt-32 pb-8 transition-opacity duration-300${hidden}`
+            ? `relative z-1 flex min-h-0 flex-1 items-end justify-center px-6 pb-3 transition-opacity duration-300${hidden}`
             : `grid min-h-0 flex-1 items-center justify-center gap-x-[clamp(44px,6vw,120px)] px-[clamp(24px,8vw,120px)] py-4 max-md:px-6 ${
                 column
                   ? 'grid-cols-[var(--art)_minmax(0,40vw)] max-md:grid-cols-[minmax(0,1fr)] max-md:grid-rows-[auto_minmax(0,1fr)_auto] max-md:items-stretch max-md:gap-y-2'

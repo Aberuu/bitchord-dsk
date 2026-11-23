@@ -161,7 +161,7 @@ export function SearchField({
         // The dropdown: glass suggestions starting with playable songs, then query completions below.
         <ul
           id={listId}
-          className={`absolute top-[calc(100%+3px)] left-0 z-(--z-contextual-menus) max-h-[min(700px,70vh)] ${dropdownClassName ?? 'w-[min(360px,100%)]'} overflow-y-auto rounded-[9px] border border-[#00000033] bg-thick-material py-1.5 shadow-[inset_0_0_0_1px_#ffffff33,0_8px_40px_#0000008c] [backdrop-filter:blur(60px)_saturate(2.2)]`}
+          className={`absolute top-[calc(100%+4px)] left-0 z-(--z-contextual-menus) max-h-[min(700px,70vh)] ${dropdownClassName ?? 'w-[min(360px,100%)]'} overflow-y-auto rounded-[14px] border border-vibrant-divider/80 bg-thick-material py-1.5 shadow-[0_16px_42px_var(--dialogShadowColor),0_4px_12px_var(--glassMaterialShadowColor)] [backdrop-filter:blur(40px)_saturate(2.2)]`}
           role="listbox"
         >
           {options.map((option, i) => {

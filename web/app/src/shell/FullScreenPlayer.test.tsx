@@ -30,6 +30,7 @@ const mockSuggestions: Suggestions = {
 };
 
 const playTrackSpy = vi.fn();
+let mockVideoId: string | null = null;
 
 vi.mock('@/data/apple/motionArt', () => ({
   useTrackMotion: () => null,
@@ -40,8 +41,15 @@ vi.mock('@/desktop/useAudioPipeline', () => ({
 }));
 
 vi.mock('@/state/video', () => ({
-  useHasVideo: () => false,
-  useVideo: Object.assign(() => null, { getState: () => ({ videoId: null }) }),
+  claimVideoSurface: () => () => {},
+  qualityLabel: (height: number) => `${height}p`,
+  setVideoQuality: () => {},
+  useHasVideo: (videoId: string | null | undefined) => !!videoId && mockVideoId === videoId,
+  useVideo: Object.assign(
+    (selector: (s: { heights: number[]; quality: 'auto' | number; activeHeight: number | null; videoId: string | null }) => unknown) =>
+      selector({ heights: [], quality: 'auto', activeHeight: null, videoId: mockVideoId }),
+    { getState: () => ({ videoId: mockVideoId }) },
+  ),
 }));
 
 vi.mock('@/data/music/queries', async (importOriginal) => {
@@ -86,6 +94,7 @@ describe('FullScreenPlayer exit animation and Ctrl+K search', () => {
     root = createRoot(host);
     qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     playTrackSpy.mockReset();
+    mockVideoId = null;
 
     useUi.setState({ fullScreen: true, fullScreenSearchOpen: false });
     usePlayer.setState({
@@ -198,5 +207,24 @@ describe('FullScreenPlayer exit animation and Ctrl+K search', () => {
     });
     expect(useUi.getState().fullScreenSearchOpen).toBe(false);
     expect(useUi.getState().fullScreen).toBe(true);
+  });
+
+  it('anchors theater video bottom scrim to bottom-0 without cutting off controls above footer', () => {
+    mockVideoId = 'v-now';
+    renderFs(false);
+
+    const dialog = host.querySelector<HTMLElement>('[data-full-screen]')!;
+    const scrim = dialog.querySelector<HTMLElement>('[data-theater-scrim="true"]')!;
+    expect(scrim).toBeTruthy();
+    expect(scrim.className).toContain('bottom-0');
+    expect(scrim.className).not.toContain('bottom-16');
+
+    const controlsSection = dialog.querySelector<HTMLElement>('section[aria-label="Player"]')!;
+    const controlsWrapper = controlsSection.parentElement!;
+    expect(controlsWrapper.className).toContain('flex-1');
+    expect(controlsWrapper.className).not.toContain('bottom-16');
+
+    const footer = dialog.querySelector('footer');
+    expect(footer).toBeTruthy();
   });
 });

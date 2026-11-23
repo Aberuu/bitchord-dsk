@@ -93,7 +93,7 @@ pub fn run() {
                 {
                     if window_vibrancy::apply_mica(&window, None).is_ok() {
                         vibrancy = "mica".to_string();
-                    } else if window_vibrancy::apply_acrylic(&window, Some((31, 31, 31, 210))).is_ok() {
+                    } else if window_vibrancy::apply_acrylic(&window, Some((0, 0, 0, 235))).is_ok() {
                         vibrancy = "acrylic".to_string();
                     }
                     if let Ok(hwnd) = window.hwnd() {

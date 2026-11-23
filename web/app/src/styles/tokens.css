@@ -70,6 +70,7 @@
 
   --pageBG: #ffffff;
   --pageBG-rgb: 255, 255, 255;
+  --scrollablePageBG: var(--pageBG);
 
   --systemPrimary: #000000e0;
   --systemSecondary: #000000a6;
@@ -106,6 +107,8 @@
   --glassMaterialShadowColor: #0000001a;
   --glassMaterialInnerStroke: #000000;
   --glassMaterialInnerStrokeAlpha: 0.05;
+  --glassMenuTopSheenAlpha: 0.22;
+  --glassMenuHighlightAlpha: 0.35;
   --glassMaterialBackdropFilter: saturate(220%) blur(16px);
 
   --systemStandardThinMaterialSover: #f6f6f67a;
@@ -155,14 +158,16 @@
   :root:not([data-theme='light']) {
     color-scheme: dark;
 
-    --pageBG: #1f1f1f;
-    --pageBG-rgb: 31, 31, 31;
+    /* Pure OLED black palette aligned with BitChord Mobile dark theme. */
+    --pageBG: #000000;
+    --pageBG-rgb: 0, 0, 0;
+    --scrollablePageBG: var(--pageBG);
 
     --systemPrimary: #ffffffeb;
-    --systemSecondary: #ffffffb8;
-    --systemTertiary: #ffffff8f;
+    --systemSecondary: #ffffffa6;
+    --systemTertiary: #ffffff78;
     --systemQuaternary: #ffffff1a;
-    --systemQuinary: #ffffff0d;
+    --systemQuinary: #ffffff0c;
 
     --keyColor: #fa586a;
     --keyColor-rgb: 250, 88, 106;
@@ -181,36 +186,38 @@
     --systemGray5: #2c2c2e;
     --systemGray6: #1c1c1e;
 
-    --labelDivider: #ffffff1a;
-    --vibrantDivider: #ebebf530;
+    --labelDivider: #ffffff14;
+    --vibrantDivider: #ffffff1f;
 
-    --glassMaterialBackground: #26262899;
-    --glassMaterialShadowColor: #00000033;
+    --glassMaterialBackground: #101012c7;
+    --glassMaterialShadowColor: #00000080;
     --glassMaterialInnerStroke: #ffffff;
-    --glassMaterialInnerStrokeAlpha: 0.25;
+    --glassMaterialInnerStrokeAlpha: 0.14;
+    --glassMenuTopSheenAlpha: 0.04;
+    --glassMenuHighlightAlpha: 0.09;
 
-    --systemStandardThinMaterialSover: #28282880;
-    --systemStandardThickMaterialSover: #282828b3;
-    --systemHeaderMaterialSover: #1e1e1ecc;
+    --systemStandardThinMaterialSover: #101012b8;
+    --systemStandardThickMaterialSover: #141417e0;
+    --systemHeaderMaterialSover: #000000e0;
 
-    --navSidebarSelectedState: #ffffff0d;
-    --tracklistHoverColor: #ffffff0f;
-    --shelfBG: #ffffff0d;
-    --opaqueShelfBG: #2b2b2b;
-    --footerBg: #323232;
-    --genericJoeColor: #323232;
-    --searchBarBorderColor: #ffffff26;
-    --segmentedControlBG: #7676803d;
-    --segmentedControlSelectedBG: #636366;
+    --navSidebarSelectedState: #ffffff14;
+    --tracklistHoverColor: #ffffff0d;
+    --shelfBG: #ffffff0a;
+    --opaqueShelfBG: #0d0d0f;
+    --footerBg: #0d0d0f;
+    --genericJoeColor: #141417;
+    --searchBarBorderColor: #ffffff1c;
+    --segmentedControlBG: #7676802e;
+    --segmentedControlSelectedBG: #2c2c2e;
     --button-pill-color: #000000;
     --button-pill-background-color: #ffffff;
-    --radiosityShadowColor: #0000004d;
-    --dialogShadowColor: #0000008c;
+    --radiosityShadowColor: #00000080;
+    --dialogShadowColor: #000000b3;
 
     --containerInnerStroke: #ffffff;
-    --containerInnerStrokeAlpha: 0.25;
+    --containerInnerStrokeAlpha: 0.14;
 
-    --skeleton-fill: #ffffff12;
+    --skeleton-fill: #ffffff0f;
     --skeleton-shimmer: #ffffff14;
   }
 }
@@ -218,14 +225,15 @@
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  --pageBG: #1f1f1f;
-  --pageBG-rgb: 31, 31, 31;
+  --pageBG: #000000;
+  --pageBG-rgb: 0, 0, 0;
+  --scrollablePageBG: var(--pageBG);
 
   --systemPrimary: #ffffffeb;
-  --systemSecondary: #ffffffb8;
-  --systemTertiary: #ffffff8f;
+  --systemSecondary: #ffffffa6;
+  --systemTertiary: #ffffff78;
   --systemQuaternary: #ffffff1a;
-  --systemQuinary: #ffffff0d;
+  --systemQuinary: #ffffff0c;
 
   --keyColor: #fa586a;
   --keyColor-rgb: 250, 88, 106;
@@ -244,48 +252,62 @@
   --systemGray5: #2c2c2e;
   --systemGray6: #1c1c1e;
 
-  --labelDivider: #ffffff1a;
-  --vibrantDivider: #ebebf530;
+  --labelDivider: #ffffff14;
+  --vibrantDivider: #ffffff1f;
 
-  --glassMaterialBackground: #26262899;
-  --glassMaterialShadowColor: #00000033;
+  --glassMaterialBackground: #101012c7;
+  --glassMaterialShadowColor: #00000080;
   --glassMaterialInnerStroke: #ffffff;
-  --glassMaterialInnerStrokeAlpha: 0.25;
+  --glassMaterialInnerStrokeAlpha: 0.14;
+  --glassMenuTopSheenAlpha: 0.04;
+  --glassMenuHighlightAlpha: 0.09;
 
-  --systemStandardThinMaterialSover: #28282880;
-  --systemStandardThickMaterialSover: #282828b3;
-  --systemHeaderMaterialSover: #1e1e1ecc;
+  --systemStandardThinMaterialSover: #101012b8;
+  --systemStandardThickMaterialSover: #141417e0;
+  --systemHeaderMaterialSover: #000000e0;
 
-  --navSidebarSelectedState: #ffffff0d;
-  --tracklistHoverColor: #ffffff0f;
-  --shelfBG: #ffffff0d;
-  --opaqueShelfBG: #2b2b2b;
-  --footerBg: #323232;
-  --genericJoeColor: #323232;
-  --searchBarBorderColor: #ffffff26;
-  --segmentedControlBG: #7676803d;
-  --segmentedControlSelectedBG: #636366;
+  --navSidebarSelectedState: #ffffff14;
+  --tracklistHoverColor: #ffffff0d;
+  --shelfBG: #ffffff0a;
+  --opaqueShelfBG: #0d0d0f;
+  --footerBg: #0d0d0f;
+  --genericJoeColor: #141417;
+  --searchBarBorderColor: #ffffff1c;
+  --segmentedControlBG: #7676802e;
+  --segmentedControlSelectedBG: #2c2c2e;
   --button-pill-color: #000000;
   --button-pill-background-color: #ffffff;
-  --radiosityShadowColor: #0000004d;
-  --dialogShadowColor: #0000008c;
+  --radiosityShadowColor: #00000080;
+  --dialogShadowColor: #000000b3;
 
   --containerInnerStroke: #ffffff;
-  --containerInnerStrokeAlpha: 0.25;
+  --containerInnerStrokeAlpha: 0.14;
 
-  --skeleton-fill: #ffffff12;
+  --skeleton-fill: #ffffff0f;
   --skeleton-shimmer: #ffffff14;
 }
 
-/* Windows Mica/Acrylic lets desktop wallpaper bleed softly behind the sidebar while keeping main text contrast high. */
+/* Windows Mica/Acrylic lets desktop wallpaper bleed softly behind the sidebar while keeping dark mode pure OLED black. */
 :root[data-vibrancy='mica'] body,
 :root[data-vibrancy='acrylic'] body {
   background-color: transparent;
 }
 
+:root[data-vibrancy='mica'][data-theme='light'],
+:root[data-vibrancy='acrylic'][data-theme='light'] {
+  --scrollablePageBG: color-mix(in srgb, var(--pageBG) 92%, transparent);
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-vibrancy='mica']:not([data-theme='dark']),
+  :root[data-vibrancy='acrylic']:not([data-theme='dark']) {
+    --scrollablePageBG: color-mix(in srgb, var(--pageBG) 92%, transparent);
+  }
+}
+
 :root[data-vibrancy='mica'] #scrollable-page,
 :root[data-vibrancy='acrylic'] #scrollable-page {
-  background-color: color-mix(in srgb, var(--pageBG) 92%, transparent);
+  background-color: var(--scrollablePageBG);
 }
 
 /* Increased contrast: drop the translucency, as Apple's _IC tokens do. */

@@ -1,3 +1,4 @@
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useEffect, useRef } from 'react';
 import { artworkAtPixels } from '@/lib/artwork';
 import { getPlayhead, onTrackEnded, usePlayer } from '@/state/player';
@@ -27,6 +28,11 @@ export function useDesktopIntegrations(): void {
       delete root.dataset.theme;
     } else {
       root.dataset.theme = theme;
+    }
+    if (isTauriDesktop()) {
+      void getCurrentWindow()
+        .setTheme(theme === 'system' ? null : theme)
+        .catch(() => {});
     }
   }, [theme]);
 
