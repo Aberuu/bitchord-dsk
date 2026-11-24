@@ -20,6 +20,7 @@ const updateSettingsMock = vi.fn(async (next: AudioSettings) => {
   currentSnapshot = { ...currentSnapshot, settings: next };
   return currentSnapshot;
 });
+const openAsioPanelMock = vi.fn(async (_deviceId?: string | null) => {});
 
 vi.mock('@/desktop/tauriBridge', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/desktop/tauriBridge')>();
@@ -31,6 +32,7 @@ vi.mock('@/desktop/tauriBridge', async (importOriginal) => {
       audioListDevices: () => listDevicesMock(),
       audioSnapshot: () => snapshotMock(),
       audioUpdateSettings: (next: AudioSettings) => updateSettingsMock(next),
+      audioOpenAsioControlPanel: (deviceId?: string | null) => openAsioPanelMock(deviceId),
       audioSetVolume: vi.fn(async () => {}),
     },
   };
@@ -54,6 +56,7 @@ describe('AudioOutputModal', () => {
     listDevicesMock.mockClear();
     snapshotMock.mockClear();
     updateSettingsMock.mockClear();
+    openAsioPanelMock.mockClear();
 
     currentDevices = [
       {
@@ -348,5 +351,59 @@ describe('AudioOutputModal', () => {
     );
     const unlockedVol = host.querySelector<HTMLInputElement>('input[aria-label="Output volume"]');
     expect(unlockedVol?.disabled).toBe(false);
+  });
+
+  it('switches to ASIO mode when selecting an ASIO driver and opens its control panel', async () => {
+    currentDevices = [
+      ...currentDevices,
+      {
+        id: 'asio:FiiO ASIO Driver',
+        name: 'FiiO ASIO Driver',
+        isDefault: false,
+        backend: 'ASIO',
+        supportsExclusive: true,
+        maxSampleRateHz: 768000,
+        kind: 'usb_dac',
+        isUsbDac: true,
+      },
+    ];
+    currentSnapshot = {
+      ...currentSnapshot,
+      asioAvailable: true,
+    };
+
+    useUi.setState({ audioOutputOpen: true });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <AudioOutputModal />
+        </QueryClientProvider>,
+      );
+    });
+    await flushUi();
+
+    const findButton = (text: string) =>
+      Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes(text));
+
+    await act(async () => {
+      findButton('FiiO ASIO Driver')!.click();
+    });
+    await flushUi();
+
+    expect(updateSettingsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        deviceId: 'asio:FiiO ASIO Driver',
+        outputMode: 'asio',
+      }),
+    );
+    expect(host.textContent).toContain('ASIO Native (Bit-Perfect)');
+    expect(host.textContent).toContain('ASIO Control Panel');
+
+    await act(async () => {
+      findButton('ASIO Control Panel')!.click();
+    });
+    await flushUi();
+
+    expect(openAsioPanelMock).toHaveBeenCalledWith('asio:FiiO ASIO Driver');
   });
 });

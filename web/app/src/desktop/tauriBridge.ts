@@ -186,6 +186,29 @@ export interface EqConfig {
   toneFocused: boolean;
 }
 
+export interface AsioClockSourceInfo {
+  index: number;
+  name: string;
+  isCurrent: boolean;
+}
+
+export interface AsioDriverCapabilities {
+  id: string;
+  name: string;
+  minBufferSamples: number;
+  maxBufferSamples: number;
+  preferredBufferSamples: number;
+  granularity: number;
+  currentSampleRateHz: number;
+  maxSampleRateHz: number;
+  supportedSampleRates: number[];
+  supportsNativeDsd: boolean;
+  maxDsdRateHz: number;
+  outputChannels: number;
+  sampleTypeName: string;
+  clockSources: AsioClockSourceInfo[];
+}
+
 export interface AudioSettings {
   outputMode: OutputMode;
   deviceId: string | null;
@@ -193,6 +216,8 @@ export interface AudioSettings {
   sleepTimerEndEpochMs: number | null;
   sleepAfterTrack: boolean;
   eq: EqConfig;
+  asioBufferSamples?: number | null;
+  asioClockSource?: number | null;
 }
 
 export interface NativePlaybackSnapshot {
@@ -210,6 +235,11 @@ export interface NativePlaybackSnapshot {
   channels: number;
   bitPerfect: BitPerfectStatus;
   asioAvailable: boolean;
+  asioBufferSamples?: number | null;
+  asioNativeDsd?: boolean;
+  asioSampleType?: string | null;
+  asioClockSources?: AsioClockSourceInfo[];
+  asioActiveClockSource?: number | null;
   eqCurvePoints: [number, number][];
   settings: AudioSettings;
 }
@@ -509,6 +539,10 @@ export const desktopApi = {
   audioStartTap: () => invoke<NativePlaybackSnapshot>('audio_start_tap'),
   audioStopTap: () => invoke<NativePlaybackSnapshot>('audio_stop_tap'),
   audioFlushTap: () => invoke<void>('audio_flush_tap'),
+  audioProbeAsioDriver: (deviceId?: string | null) =>
+    invoke<AsioDriverCapabilities>('audio_probe_asio_driver', { deviceId: deviceId ?? null }),
+  audioOpenAsioControlPanel: (deviceId?: string | null) =>
+    invoke<void>('audio_open_asio_control_panel', { deviceId: deviceId ?? null }),
   onAudioDevicesChanged: (listener: () => void) =>
     listen<Record<string, unknown>>('audio://devices-changed', () => listener()),
   onNativeTrackEnded: (listener: (trackId: string) => void) =>

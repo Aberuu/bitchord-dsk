@@ -257,6 +257,8 @@ pub fn run() {
             commands::audio_start_tap,
             commands::audio_stop_tap,
             commands::audio_flush_tap,
+            commands::audio_probe_asio_driver,
+            commands::audio_open_asio_control_panel,
             commands::cast_support_status,
             commands::cast_get_state,
             commands::cast_discover,

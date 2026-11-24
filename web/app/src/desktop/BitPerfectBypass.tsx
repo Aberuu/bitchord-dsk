@@ -12,12 +12,16 @@ export function BitPerfectConfirmBanner({
   onConfirm,
   onCancel,
   variant = 'modal',
+  mode = 'wasapi_exclusive',
 }: {
   onConfirm: () => void;
   onCancel: () => void;
   variant?: 'modal' | 'page';
+  mode?: 'wasapi_exclusive' | 'asio';
 }) {
   const isModal = variant === 'modal';
+  const modeTitle =
+    mode === 'asio' ? 'Enable ASIO Driver (Bit-Perfect)?' : 'Enable WASAPI Exclusive (Bit-Perfect)?';
   return (
     <div
       role="alertdialog"
@@ -34,7 +38,7 @@ export function BitPerfectConfirmBanner({
           id="bitperfect-confirm-title"
           className={`type-title-3-emphasized ${isModal ? 'text-white' : 'text-primary'}`}
         >
-          Enable WASAPI Exclusive (Bit-Perfect)?
+          {modeTitle}
         </span>
         <p
           id="bitperfect-confirm-desc"

@@ -33,7 +33,7 @@
 
 | Feature | Status | Notes |
 |---|---|---|
-| **Audio Playback Engine** | 🟢 Beta Ready | Low-latency Symphonia decoding + CPAL/WASAPI audio output |
+| **Audio Playback Engine** | 🟢 Beta Ready | Low-latency Symphonia decoding + CPAL/WASAPI/ASIO & DSD (DoP) audio output |
 | **Audio Device Hotplugging**| 🟢 Beta Ready | Dynamic runtime device detection, hot-swap, and device selection modal |
 | **Web Audio 10-Band EQ** | 🟢 Beta Ready | 10 frequency bands, pre-amp control, and built-in genre presets |
 | **Audio Pipeline Inspector**| 🟢 Beta Ready | Real-time monitoring of sample rate, channels, bit depth, and buffer size |
@@ -260,7 +260,7 @@ src-tauri/target/release/bundle/nsis/
 ## 📦 Release History
 
 ### `v0.8.0-beta.808` (Current - Beta Testing)
-- **Audio & Playback:** Added Bit-Perfect bypass mode (disables Web Audio EQ & software volume for bit-exact DAC output), audio device hotplugging, audio tap worklet, direct stream resolver, and seamless source switching / quality upgrade.
+- **Audio & Playback:** Added ASIO output (`asio.rs`) and DSD/DoP enhancements (`dsd.rs`), Bit-Perfect bypass mode (disables Web Audio EQ & software volume for bit-exact DAC output), audio device hotplugging, audio tap worklet, direct stream resolver, and seamless source switching / quality upgrade.
 - **Casting & External Sources:** Added CastV2 & DLNA casting (`CastModal`), `core-sources` (WebDAV, SMB, JioSaavn, FLAC addon via `scripts/run-flac-addon.ps1`), and system tray close-behavior preferences.
 - **UI & Shell:** Added Developer Watermark, refined `TitleBar`, `AppShell`, `FullScreenPlayer`, and custom scrollbar styling.
 

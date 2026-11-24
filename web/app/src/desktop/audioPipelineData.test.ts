@@ -252,4 +252,100 @@ describe('audioPipelineData', () => {
     const outputStage = summary.stages[4]!;
     expect(outputStage.rows.find((r) => r.label === 'Direct')?.value).toContain('Bit-exact');
   });
+
+  it('reports Native ASIO DSD512 bitstream, buffer size, and driver format in the pipeline', () => {
+    const summary = buildAudioPipelineData({
+      nowPlaying: {
+        videoId: 'local:dsd-1',
+        streamInfo: 'DSD512 · ASIO Native DSD',
+        stream: { codec: 'DSD512', sampleRateHz: 22_579_200, bitrateKbps: 45_158, channels: 2 },
+      },
+      eq: DEFAULT_EQ_CONFIG,
+      balance: 0,
+      spatialAudio: false,
+      loudnessNormalization: false,
+      outputPrecision: 'float32',
+      bitPerfect: {
+        active: true,
+        driver: 'ASIO Native DSD',
+        deviceName: 'FiiO ASIO Driver',
+        sampleRateHz: 22_579_200,
+        outputBits: 1,
+        sourceBits: 1,
+        sourceRateHz: 22_579_200,
+        exact: true,
+        dacLimited: false,
+        fallbackReason: null,
+      },
+      nativeSnapshot: {
+        active: true,
+        tapActive: false,
+        status: 'playing',
+        trackId: 'local:dsd-1',
+        positionSec: 12,
+        durationSec: 240,
+        volume: 1,
+        playbackRate: 1,
+        codec: 'DSD512',
+        sampleRateHz: 22_579_200,
+        bitDepth: 1,
+        channels: 2,
+        bitPerfect: {
+          active: true,
+          driver: 'ASIO Native DSD',
+          deviceName: 'FiiO ASIO Driver',
+          sampleRateHz: 22_579_200,
+          outputBits: 1,
+          sourceBits: 1,
+          sourceRateHz: 22_579_200,
+          exact: true,
+          dacLimited: false,
+          fallbackReason: null,
+        },
+        asioAvailable: true,
+        asioBufferSamples: 256,
+        asioNativeDsd: true,
+        asioSampleType: 'DSDInt8LSB1',
+        asioClockSources: [{ index: 0, name: 'Internal Clock', isCurrent: true }],
+        asioActiveClockSource: 0,
+        eqCurvePoints: [],
+        settings: {
+          outputMode: 'asio',
+          deviceId: 'asio:FiiO ASIO Driver',
+          playbackRate: 1,
+          sleepTimerEndEpochMs: null,
+          sleepAfterTrack: false,
+          asioBufferSamples: 256,
+          asioClockSource: 0,
+          eq: DEFAULT_EQ_CONFIG,
+        },
+      },
+      devices: [
+        {
+          id: 'asio:FiiO ASIO Driver',
+          name: 'FiiO ASIO Driver',
+          isDefault: false,
+          backend: 'ASIO',
+          supportsExclusive: true,
+          maxSampleRateHz: 768000,
+          kind: 'usb_dac',
+          isUsbDac: true,
+        },
+      ],
+      webAudioSampleRateHz: 48000,
+      desktop: true,
+    });
+
+    expect(summary.activeDeviceName).toBe('FiiO ASIO Driver');
+    expect(summary.stages[1]!.rows.find((r) => r.label === 'Format')?.value).toBe(
+      '1-bit Native DSD Bitstream',
+    );
+    const outputStage = summary.stages[4]!;
+    expect(outputStage.rows.find((r) => r.label === 'Transport')?.value).toBe('ASIO Native DSD');
+    expect(outputStage.rows.find((r) => r.label === 'Output')?.value).toContain(
+      'Native DSD (1-bit',
+    );
+    expect(outputStage.rows.find((r) => r.label === 'ASIO Buffer')?.value).toContain('256 samples');
+    expect(outputStage.rows.find((r) => r.label === 'ASIO Format')?.value).toBe('DSDInt8LSB1');
+  });
 });

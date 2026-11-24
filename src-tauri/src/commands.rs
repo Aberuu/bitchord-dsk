@@ -9,7 +9,9 @@ use core_integrations::{
     SmtcMetadata, SmtcPlayback,
 };
 use core_lyrics::HttpRequestParams;
-use core_playback::{AudioDeviceInfo, AudioSettings, NativePlaybackSnapshot};
+use core_playback::{
+    AsioDriverCapabilities, AudioDeviceInfo, AudioSettings, NativePlaybackSnapshot,
+};
 use core_sources::{
     AddonHealthStatus, AddonProbeResult, RemoteTrackItem, ResolvedSourceStream,
     SourceCandidateTrack, SourcesSnapshot,
@@ -548,6 +550,28 @@ pub async fn audio_stop_tap(state: State<'_, AppState>) -> Result<NativePlayback
 #[tauri::command]
 pub fn audio_flush_tap(state: State<'_, AppState>) {
     state.playback.flush_tap();
+}
+
+#[tauri::command]
+pub async fn audio_probe_asio_driver(
+    device_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<AsioDriverCapabilities, String> {
+    let playback = state.playback.clone();
+    run_blocking(move || playback.probe_asio(device_id.as_deref()))
+        .await?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn audio_open_asio_control_panel(
+    device_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let playback = state.playback.clone();
+    run_blocking(move || playback.open_asio_control_panel(device_id.as_deref()))
+        .await?
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

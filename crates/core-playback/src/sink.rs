@@ -63,7 +63,7 @@ pub struct BitPerfectStatus {
 }
 
 pub fn asio_available() -> bool {
-    cfg!(feature = "asio")
+    cfg!(windows) && !crate::asio::list_asio_drivers().is_empty()
 }
 
 fn is_usb_bus_hint(value: &str) -> bool {
@@ -439,30 +439,26 @@ pub fn list_output_devices() -> Vec<AudioDeviceInfo> {
         }
     }
 
-    #[cfg(feature = "asio")]
+    #[cfg(windows)]
     {
-        if let Ok(asio_host) = cpal::host_from_id(cpal::HostId::Asio) {
-            if let Ok(iter) = asio_host.output_devices() {
-                for (idx, dev) in iter.enumerate() {
-                    let Ok(name) = dev.name() else { continue };
-                    let max_sr = dev
-                        .supported_output_configs()
-                        .ok()
-                        .and_then(|cfgs| cfgs.map(|c| c.max_sample_rate().0).max())
-                        .unwrap_or(192_000);
-                    let kind = classify_endpoint(&name, "", "asio", None);
-                    devices.push(AudioDeviceInfo {
-                        id: format!("asio:{idx}:{name}"),
-                        is_default: false,
-                        name,
-                        backend: "ASIO".into(),
-                        supports_exclusive: true,
-                        max_sample_rate_hz: max_sr,
-                        kind,
-                        is_usb_dac: kind == AudioDeviceKind::UsbDac,
-                    });
-                }
-            }
+        for drv in crate::asio::list_asio_drivers() {
+            let lower = drv.name.to_ascii_lowercase();
+            let is_onboard = lower.contains("realtek") || lower.contains("asio4all") || lower.contains("flexasio");
+            let kind = if is_onboard {
+                AudioDeviceKind::Speakers
+            } else {
+                AudioDeviceKind::UsbDac
+            };
+            devices.push(AudioDeviceInfo {
+                id: drv.id,
+                is_default: false,
+                name: drv.name,
+                backend: "ASIO".into(),
+                supports_exclusive: true,
+                max_sample_rate_hz: if is_onboard { 192_000 } else { 384_000 },
+                kind,
+                is_usb_dac: !is_onboard,
+            });
         }
     }
 

@@ -1,6 +1,11 @@
+use crate::asio::{
+    open_asio_control_panel_detached, probe_asio_driver, run_asio_session, AsioClockSourceInfo,
+    AsioDriverCapabilities, AsioRenderMode,
+};
 use crate::automix_ffi::TimeStretcher;
 use crate::converter::DacFormatConverter;
 use crate::decoder::{decode_bytes_to_stereo_f32, decode_file_to_stereo_f32, DecodedAudio};
+use crate::dsd::reverse_bits_u8;
 use crate::eq::{EqConfig, EqCurve, EqualizerProcessor};
 use crate::sink::{
     asio_available, find_cpal_device, list_output_devices, probe_wasapi_exclusive_format,
@@ -26,6 +31,10 @@ pub struct AudioSettings {
     pub sleep_timer_end_epoch_ms: Option<u64>,
     pub sleep_after_track: bool,
     pub eq: EqConfig,
+    #[serde(default)]
+    pub asio_buffer_samples: Option<u32>,
+    #[serde(default)]
+    pub asio_clock_source: Option<i32>,
 }
 
 impl Default for AudioSettings {
@@ -37,6 +46,8 @@ impl Default for AudioSettings {
             sleep_timer_end_epoch_ms: None,
             sleep_after_track: false,
             eq: EqConfig::default(),
+            asio_buffer_samples: None,
+            asio_clock_source: None,
         }
     }
 }
@@ -58,6 +69,16 @@ pub struct NativePlaybackSnapshot {
     pub channels: usize,
     pub bit_perfect: BitPerfectStatus,
     pub asio_available: bool,
+    #[serde(default)]
+    pub asio_buffer_samples: Option<i32>,
+    #[serde(default)]
+    pub asio_native_dsd: bool,
+    #[serde(default)]
+    pub asio_sample_type: Option<String>,
+    #[serde(default)]
+    pub asio_clock_sources: Vec<AsioClockSourceInfo>,
+    #[serde(default)]
+    pub asio_active_clock_source: Option<i32>,
     pub eq_curve_points: Vec<(f32, f32)>,
     pub settings: AudioSettings,
 }
@@ -77,6 +98,11 @@ struct SharedState {
     track: Option<ActiveTrack>,
     tap_active: bool,
     bit_perfect: BitPerfectStatus,
+    asio_buffer_samples: Option<i32>,
+    asio_native_dsd: bool,
+    asio_sample_type: Option<String>,
+    asio_clock_sources: Vec<AsioClockSourceInfo>,
+    asio_active_clock_source: Option<i32>,
     eq_dirty: bool,
     crossfade_sec: f32,
 }
@@ -92,6 +118,7 @@ pub struct NativeAudioEngine {
     route_lock: Mutex<()>,
     worker: Mutex<Option<WorkerHandle>>,
     request_seq: AtomicU64,
+    asio_panel_flag: Arc<AtomicBool>,
     on_ended: Arc<dyn Fn(String) + Send + Sync>,
 }
 
@@ -105,6 +132,11 @@ impl NativeAudioEngine {
             track: None,
             tap_active: false,
             bit_perfect: BitPerfectStatus::default(),
+            asio_buffer_samples: None,
+            asio_native_dsd: false,
+            asio_sample_type: None,
+            asio_clock_sources: Vec::new(),
+            asio_active_clock_source: None,
             eq_dirty: true,
             crossfade_sec: 0.0,
         }));
@@ -114,8 +146,32 @@ impl NativeAudioEngine {
             route_lock: Mutex::new(()),
             worker: Mutex::new(None),
             request_seq: AtomicU64::new(0),
+            asio_panel_flag: Arc::new(AtomicBool::new(false)),
             on_ended,
         }
+    }
+
+    pub fn probe_asio(&self, device_id: Option<&str>) -> Result<AsioDriverCapabilities> {
+        let target = device_id
+            .map(str::to_string)
+            .or_else(|| self.shared.lock().settings.device_id.clone());
+        probe_asio_driver(target.as_deref())
+    }
+
+    pub fn open_asio_control_panel(&self, device_id: Option<&str>) -> Result<()> {
+        let active_is_asio = {
+            let guard = self.shared.lock();
+            guard.settings.output_mode == OutputMode::Asio
+                && (guard.track.is_some() || guard.tap_active)
+        };
+        if active_is_asio && self.has_live_worker() {
+            self.asio_panel_flag.store(true, Ordering::SeqCst);
+            return Ok(());
+        }
+        let target = device_id
+            .map(str::to_string)
+            .or_else(|| self.shared.lock().settings.device_id.clone());
+        open_asio_control_panel_detached(target.as_deref())
     }
 
     pub fn next_request_seq(&self) -> u64 {
@@ -173,6 +229,11 @@ impl NativeAudioEngine {
             channels: ch,
             bit_perfect: guard.bit_perfect.clone(),
             asio_available: asio_available(),
+            asio_buffer_samples: guard.asio_buffer_samples,
+            asio_native_dsd: guard.asio_native_dsd,
+            asio_sample_type: guard.asio_sample_type.clone(),
+            asio_clock_sources: guard.asio_clock_sources.clone(),
+            asio_active_clock_source: guard.asio_active_clock_source,
             eq_curve_points: eq_curve,
             settings: guard.settings.clone(),
         }
@@ -180,7 +241,17 @@ impl NativeAudioEngine {
 
     pub fn update_settings(&self, settings: AudioSettings) -> NativePlaybackSnapshot {
         let _route = self.route_lock.lock();
+        let effective_mode = if settings
+            .device_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("asio:"))
+        {
+            OutputMode::Asio
+        } else {
+            settings.output_mode
+        };
         let next_settings = AudioSettings {
+            output_mode: effective_mode,
             playback_rate: settings.playback_rate.clamp(0.5, 2.0),
             ..settings
         };
@@ -188,11 +259,21 @@ impl NativeAudioEngine {
         let (route_changed, has_local, tap_active, uses_default_shared) = {
             let mut guard = self.shared.lock();
             let changed = guard.settings.output_mode != next_settings.output_mode
-                || guard.settings.device_id != next_settings.device_id;
+                || guard.settings.device_id != next_settings.device_id
+                || (next_settings.output_mode == OutputMode::Asio
+                    && (guard.settings.asio_buffer_samples != next_settings.asio_buffer_samples
+                        || guard.settings.asio_clock_source != next_settings.asio_clock_source));
             guard.settings = next_settings;
             guard.eq_dirty = true;
             if changed {
                 guard.bit_perfect.fallback_reason = None;
+                if guard.settings.output_mode != OutputMode::Asio {
+                    guard.asio_buffer_samples = None;
+                    guard.asio_native_dsd = false;
+                    guard.asio_sample_type = None;
+                    guard.asio_clock_sources.clear();
+                    guard.asio_active_clock_source = None;
+                }
             }
             let default_shared = guard.settings.device_id.is_none()
                 && guard.settings.output_mode == OutputMode::Shared;
@@ -457,7 +538,16 @@ impl NativeAudioEngine {
     }
 
     fn spawn_worker_for_active_source_locked(&self) -> Result<()> {
-        let (mode, device_id, tap_source, source_rate_hz, source_bits) = {
+        let (
+            mode,
+            device_id,
+            tap_source,
+            source_rate_hz,
+            source_bits,
+            dsd_bit_rate,
+            asio_buffer_samples,
+            asio_clock_source,
+        ) = {
             let guard = self.shared.lock();
             if guard.tap_active {
                 (
@@ -466,6 +556,9 @@ impl NativeAudioEngine {
                     Some(Arc::clone(&self.tap)),
                     self.tap.input_sample_rate_hz(),
                     32,
+                    None,
+                    guard.settings.asio_buffer_samples,
+                    guard.settings.asio_clock_source,
                 )
             } else if let Some(t) = guard.track.as_ref() {
                 (
@@ -474,6 +567,9 @@ impl NativeAudioEngine {
                     None,
                     t.audio.sample_rate_hz,
                     t.audio.bit_depth,
+                    t.audio.raw_dsd.as_ref().map(|d| d.bit_rate),
+                    guard.settings.asio_buffer_samples,
+                    guard.settings.asio_clock_source,
                 )
             } else {
                 return Ok(());
@@ -484,12 +580,54 @@ impl NativeAudioEngine {
         let worker_stop = Arc::clone(&stop_flag);
         let shared = Arc::clone(&self.shared);
         let on_ended = Arc::clone(&self.on_ended);
+        let panel_flag = Arc::clone(&self.asio_panel_flag);
+        panel_flag.store(false, Ordering::SeqCst);
         let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(1);
 
         let handle = thread::Builder::new()
             .name("bitchord-audio-out".into())
             .spawn(move || {
                 let mut ready = Some(ready_tx);
+                if mode == OutputMode::Asio {
+                    match run_asio_loop(
+                        device_id.as_deref(),
+                        source_rate_hz,
+                        source_bits,
+                        dsd_bit_rate,
+                        asio_buffer_samples,
+                        asio_clock_source,
+                        tap_source.clone(),
+                        Arc::clone(&shared),
+                        Arc::clone(&worker_stop),
+                        Arc::clone(&panel_flag),
+                        Arc::clone(&on_ended),
+                        &mut ready,
+                    ) {
+                        Ok(()) => return,
+                        Err(err) => {
+                            let mut guard = shared.lock();
+                            guard.asio_buffer_samples = None;
+                            guard.asio_native_dsd = false;
+                            guard.asio_sample_type = None;
+                            guard.bit_perfect = BitPerfectStatus {
+                                active: false,
+                                driver: Some(if tap_source.is_some() {
+                                    "WASAPI Shared Tap".into()
+                                } else {
+                                    "WASAPI Shared".into()
+                                }),
+                                device_name: None,
+                                sample_rate_hz: source_rate_hz,
+                                output_bits: 32,
+                                source_bits,
+                                source_rate_hz,
+                                exact: false,
+                                dac_limited: false,
+                                fallback_reason: Some(format!("ASIO unavailable: {err}")),
+                            };
+                        }
+                    }
+                }
                 if mode == OutputMode::WasapiExclusive {
                     match run_wasapi_exclusive_loop(
                         device_id.as_deref(),
@@ -568,6 +706,172 @@ fn signal_ready(ready_tx: &mut Option<mpsc::SyncSender<()>>) {
     if let Some(tx) = ready_tx.take() {
         let _ = tx.try_send(());
     }
+}
+
+fn render_next_dsd_block(
+    shared: &Arc<Mutex<SharedState>>,
+    out_left: &mut [u8],
+    out_right: &mut [u8],
+    driver_lsb_first: bool,
+    on_ended: &Arc<dyn Fn(String) + Send + Sync>,
+) {
+    out_left.fill(0x69);
+    out_right.fill(0x69);
+    let mut finished_track_id: Option<String> = None;
+
+    {
+        let mut guard = shared.lock();
+        if guard.status != "playing" {
+            return;
+        }
+        let Some(track) = guard.track.as_mut() else {
+            return;
+        };
+        let Some(dsd) = track.audio.raw_dsd.as_ref() else {
+            return;
+        };
+        let pcm_rate = track.audio.sample_rate_hz.max(1) as f64;
+        let bytes_per_sec = dsd.bit_rate.max(8) as f64 / 8.0;
+        let start_byte = ((track.frame_cursor / pcm_rate) * bytes_per_sec).round() as usize;
+        let total_bytes = dsd.left_bytes.len().min(dsd.right_bytes.len());
+        if start_byte >= total_bytes {
+            finished_track_id = Some(track.id.clone());
+            guard.status = "idle".into();
+        } else {
+            let wanted = out_left.len().min(out_right.len());
+            let avail = (total_bytes - start_byte).min(wanted);
+            let flip = dsd.lsb_first != driver_lsb_first;
+            if flip {
+                for i in 0..avail {
+                    out_left[i] = reverse_bits_u8(dsd.left_bytes[start_byte + i]);
+                    out_right[i] = reverse_bits_u8(dsd.right_bytes[start_byte + i]);
+                }
+            } else {
+                out_left[..avail].copy_from_slice(&dsd.left_bytes[start_byte..start_byte + avail]);
+                out_right[..avail].copy_from_slice(&dsd.right_bytes[start_byte..start_byte + avail]);
+            }
+            let next_byte = start_byte + avail;
+            track.frame_cursor = (next_byte as f64 / bytes_per_sec) * pcm_rate;
+            if next_byte >= total_bytes {
+                finished_track_id = Some(track.id.clone());
+                guard.status = "idle".into();
+            }
+        }
+    }
+
+    if let Some(id) = finished_track_id {
+        on_ended(id);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_asio_loop(
+    device_id: Option<&str>,
+    source_rate_hz: u32,
+    source_bits: u32,
+    dsd_bit_rate: Option<u32>,
+    requested_buffer_samples: Option<u32>,
+    requested_clock_source: Option<i32>,
+    tap_source: Option<Arc<AudioTapBuffer>>,
+    shared: Arc<Mutex<SharedState>>,
+    stop_flag: Arc<AtomicBool>,
+    panel_flag: Arc<AtomicBool>,
+    on_ended: Arc<dyn Fn(String) + Send + Sync>,
+    ready_tx: &mut Option<mpsc::SyncSender<()>>,
+) -> Result<()> {
+    let is_tap = tap_source.is_some();
+    let shared_for_ready = Arc::clone(&shared);
+    let ready_cell = std::cell::RefCell::new(ready_tx.take());
+
+    run_asio_session(
+        device_id,
+        source_rate_hz,
+        if is_tap { None } else { dsd_bit_rate },
+        requested_buffer_samples,
+        requested_clock_source,
+        stop_flag,
+        panel_flag,
+        |info| {
+            let exact = info.native_dsd || info.sample_rate_hz == source_rate_hz;
+            let driver_label = if info.native_dsd {
+                match info.sample_rate_hz {
+                    2_822_400 => "ASIO Native DSD64".into(),
+                    5_644_800 => "ASIO Native DSD128".into(),
+                    11_289_600 => "ASIO Native DSD256".into(),
+                    22_579_200 => "ASIO Native DSD512".into(),
+                    45_158_400 => "ASIO Native DSD1024".into(),
+                    _ => "ASIO Native DSD".into(),
+                }
+            } else if is_tap {
+                "ASIO Tap".into()
+            } else {
+                "ASIO Native".into()
+            };
+            {
+                let mut guard = shared_for_ready.lock();
+                guard.asio_buffer_samples = Some(info.buffer_samples);
+                guard.asio_native_dsd = info.native_dsd;
+                guard.asio_sample_type = Some(info.sample_type_name.clone());
+                guard.asio_clock_sources = info.clock_sources.clone();
+                guard.asio_active_clock_source = info.active_clock_source;
+                guard.bit_perfect = BitPerfectStatus {
+                    active: true,
+                    driver: Some(driver_label),
+                    device_name: Some(info.driver_name.clone()),
+                    sample_rate_hz: info.sample_rate_hz,
+                    output_bits: info.output_bits,
+                    source_bits: if info.native_dsd { 1 } else { source_bits },
+                    source_rate_hz: if info.native_dsd {
+                        info.sample_rate_hz
+                    } else {
+                        source_rate_hz
+                    },
+                    exact,
+                    dac_limited: !exact,
+                    fallback_reason: None,
+                };
+            }
+            let mut slot = ready_cell.borrow_mut();
+            signal_ready(&mut slot);
+        },
+        move |info| {
+            let output_rate = info.sample_rate_hz;
+            let shared_cb = Arc::clone(&shared);
+            let on_ended_cb = Arc::clone(&on_ended);
+            let tap_cb = tap_source.clone();
+            let mut eq = EqualizerProcessor::new(output_rate);
+            let mut stretcher = TimeStretcher::new(output_rate);
+            Box::new(move |mode| match mode {
+                AsioRenderMode::DsdRaw {
+                    left,
+                    right,
+                    driver_lsb_first,
+                } => {
+                    render_next_dsd_block(&shared_cb, left, right, driver_lsb_first, &on_ended_cb);
+                }
+                AsioRenderMode::PcmStereoF32(out_stereo) => {
+                    if let Some(ref tap) = tap_cb {
+                        let playing = shared_cb.lock().status == "playing";
+                        if playing {
+                            tap.pop_resampled(out_stereo, output_rate);
+                        } else {
+                            out_stereo.fill(0.0);
+                        }
+                    } else {
+                        render_next_block(
+                            &shared_cb,
+                            out_stereo,
+                            output_rate,
+                            &mut eq,
+                            &mut stretcher,
+                            true,
+                            &on_ended_cb,
+                        );
+                    }
+                }
+            })
+        },
+    )
 }
 
 fn render_next_block(
@@ -1101,6 +1405,7 @@ mod tests {
                     channels: 2,
                     duration_sec: 4.0 / 96_000.0,
                     codec: "FLAC".into(),
+                    raw_dsd: None,
                 }),
                 frame_cursor: 0.0,
                 next_audio: None,
@@ -1123,6 +1428,49 @@ mod tests {
         );
 
         assert_eq!(out, source_pcm);
+    }
+
+    #[test]
+    fn render_next_dsd_block_streams_raw_dsd_with_bit_order_conversion() {
+        let engine = NativeAudioEngine::new(Arc::new(|_| {}));
+        let raw = crate::dsd::RawDsdStream {
+            bit_rate: 22_579_200, // DSD512
+            lsb_first: true,
+            left_bytes: vec![0x81, 0x0F, 0xA0, 0x55],
+            right_bytes: vec![0x03, 0xF0, 0x0C, 0xAA],
+            duration_sec: 32.0 / 22_579_200.0,
+            label: "DSD512".into(),
+        };
+        {
+            let mut guard = engine.shared.lock();
+            guard.status = "playing".into();
+            guard.track = Some(ActiveTrack {
+                id: "local:dsd512".into(),
+                audio: Arc::new(DecodedAudio {
+                    samples_stereo_f32: vec![0.0; 16],
+                    sample_rate_hz: 176_400,
+                    bit_depth: 24,
+                    channels: 2,
+                    duration_sec: raw.duration_sec,
+                    codec: "DSD512".into(),
+                    raw_dsd: Some(raw),
+                }),
+                frame_cursor: 0.0,
+                next_audio: None,
+            });
+        }
+        let mut l = [0u8; 4];
+        let mut r = [0u8; 4];
+        let ended = Arc::new(AtomicBool::new(false));
+        let ended_cb = Arc::clone(&ended);
+        let on_ended: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |_| {
+            ended_cb.store(true, Ordering::SeqCst);
+        });
+        // Request MSB-first output from an LSB-first DSF stream -> each byte must bit-reverse.
+        render_next_dsd_block(&engine.shared, &mut l, &mut r, false, &on_ended);
+        assert_eq!(l, [0x81u8.reverse_bits(), 0x0Fu8.reverse_bits(), 0xA0u8.reverse_bits(), 0x55u8.reverse_bits()]);
+        assert_eq!(r, [0x03u8.reverse_bits(), 0xF0u8.reverse_bits(), 0x0Cu8.reverse_bits(), 0xAAu8.reverse_bits()]);
+        assert!(ended.load(Ordering::SeqCst));
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use crate::dsd::{decimate_dsd_to_pcm_f32, parse_dsf_bytes, RawDsdStream};
 use anyhow::{anyhow, Context, Result};
 use std::fs::File;
 use std::io::Cursor;
@@ -18,12 +19,33 @@ pub struct DecodedAudio {
     pub channels: usize,
     pub duration_sec: f64,
     pub codec: String,
+    pub raw_dsd: Option<RawDsdStream>,
+}
+
+fn try_decode_dsf_bytes(bytes: &[u8]) -> Result<DecodedAudio> {
+    let raw = parse_dsf_bytes(bytes)?;
+    let (pcm, pcm_rate) = decimate_dsd_to_pcm_f32(&raw);
+    let duration_sec = raw.duration_sec;
+    let codec = raw.label.clone();
+    Ok(DecodedAudio {
+        samples_stereo_f32: pcm,
+        sample_rate_hz: pcm_rate,
+        bit_depth: 24,
+        channels: 2,
+        duration_sec,
+        codec,
+        raw_dsd: Some(raw),
+    })
 }
 
 pub fn decode_file_to_stereo_f32(path: &Path) -> Result<DecodedAudio> {
+    let ext = path.extension().and_then(|e| e.to_str());
+    if ext.is_some_and(|e| e.eq_ignore_ascii_case("dsf")) {
+        let bytes = std::fs::read(path).with_context(|| format!("read DSF file {}", path.display()))?;
+        return try_decode_dsf_bytes(&bytes);
+    }
     let file = File::open(path).with_context(|| format!("open audio file {}", path.display()))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
-    let ext = path.extension().and_then(|e| e.to_str());
     decode_source_to_stereo_f32(mss, ext, &path.display().to_string())
 }
 
@@ -32,6 +54,9 @@ pub fn decode_bytes_to_stereo_f32(
     ext: Option<&str>,
     label: &str,
 ) -> Result<DecodedAudio> {
+    if ext.is_some_and(|e| e.eq_ignore_ascii_case("dsf")) || bytes.starts_with(b"DSD ") {
+        return try_decode_dsf_bytes(&bytes);
+    }
     let mss = MediaSourceStream::new(Box::new(Cursor::new(bytes)), Default::default());
     decode_source_to_stereo_f32(mss, ext, label)
 }
@@ -137,6 +162,7 @@ fn decode_source_to_stereo_f32(
         channels: src_channels,
         duration_sec,
         codec,
+        raw_dsd: None,
     })
 }
 

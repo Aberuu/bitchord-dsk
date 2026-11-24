@@ -1,7 +1,9 @@
+import { useQuery } from '@tanstack/react-query';
 import {
   AudioLines,
   ChevronRight,
   Cpu,
+  ExternalLink,
   RefreshCw,
   SlidersHorizontal,
   Sparkles,
@@ -23,6 +25,7 @@ import {
 } from '@/desktop/BitPerfectBypass';
 import { isExclusiveOutputMode } from '@/desktop/bitPerfectMode';
 import {
+  desktopApi,
   isTauriDesktop,
   type AudioSettings,
   type OutputMode,
@@ -39,6 +42,17 @@ import {
 import { useUi } from '@/state/ui';
 import { Toggle } from './IntegrationSettings';
 import { settingsUi } from './settingsStyles';
+
+const ASIO_BUFFER_PRESETS = [64, 128, 256, 512, 1024, 2048, 4096];
+
+function formatDsdCeiling(hz: number): string | null {
+  if (hz >= 45_158_400) return 'DSD1024';
+  if (hz >= 22_579_200) return 'DSD512';
+  if (hz >= 11_289_600) return 'DSD256';
+  if (hz >= 5_644_800) return 'DSD128';
+  if (hz >= 2_822_400) return 'DSD64';
+  return null;
+}
 
 const SPEED_OPTIONS = [0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2].map((r) => ({
   value: r,
@@ -95,15 +109,65 @@ export default function PlaybackSettingsPage() {
   });
   const { lockDspFeatures } = useBitPerfectUi();
   const [pendingOutputMode, setPendingOutputMode] = useState<OutputMode | null>(null);
+  const [asioPanelError, setAsioPanelError] = useState<string | null>(null);
 
   const snap = snapQuery.data;
   const settings = snap?.settings;
   const devices = devicesQuery.data ?? [];
   const dspLocked =
     lockDspFeatures || (desktop && isExclusiveOutputMode(settings?.outputMode));
+  const asioModeActive = desktop && settings?.outputMode === 'asio';
+
+  const asioCapQuery = useQuery({
+    queryKey: ['desktop', 'audio', 'asio', settings?.deviceId ?? null],
+    queryFn: () => desktopApi.audioProbeAsioDriver(settings?.deviceId ?? null),
+    enabled: asioModeActive,
+    staleTime: 10_000,
+    retry: false,
+  });
+  const asioCaps = asioCapQuery.data;
+  const asioClockSources = asioCaps?.clockSources.length
+    ? asioCaps.clockSources
+    : (snap?.asioClockSources ?? []);
+
+  const asioBufferValues = Array.from(
+    new Set([
+      ...ASIO_BUFFER_PRESETS.filter((size) => {
+        if (!asioCaps || asioCaps.maxBufferSamples <= 0) return true;
+        return size >= asioCaps.minBufferSamples && size <= asioCaps.maxBufferSamples;
+      }),
+      ...(asioCaps?.preferredBufferSamples ? [asioCaps.preferredBufferSamples] : []),
+      ...(settings?.asioBufferSamples ? [settings.asioBufferSamples] : []),
+    ]),
+  ).sort((a, b) => a - b);
+
+  const asioBufferOptions: { value: string; label: string }[] = [
+    {
+      value: 'auto',
+      label: asioCaps?.preferredBufferSamples
+        ? `Auto (${asioCaps.preferredBufferSamples} samples)`
+        : 'Auto (Driver Preferred)',
+    },
+    ...asioBufferValues.map((size) => ({
+      value: String(size),
+      label: `${size} samples`,
+    })),
+  ];
+
+  const activeBufferSamples =
+    snap?.asioBufferSamples ??
+    settings?.asioBufferSamples ??
+    asioCaps?.preferredBufferSamples ??
+    null;
+  const activeRateForLatency = snap?.sampleRateHz || 48000;
+  const bufferLatencyMs =
+    activeBufferSamples && activeRateForLatency > 0
+      ? ((activeBufferSamples / activeRateForLatency) * 1000).toFixed(1)
+      : null;
 
   const patchNative = (patch: Partial<AudioSettings>) => {
     if (!settings) return;
+    setAsioPanelError(null);
     saveNative.mutate({ ...settings, ...patch, eq });
   };
 
@@ -127,7 +191,7 @@ export default function PlaybackSettingsPage() {
               <div className={settingsUi.rowText}>
                 <span className="type-title-3 text-primary">Output precision</span>
                 <span className="type-callout text-secondary tabular-nums">
-                  {desktop ? 'WASAPI' : 'Web Audio'} · {pipeline.activeDeviceName} · {pipeline.shortSubtitle}
+                  {settings?.outputMode === 'asio' ? 'ASIO' : desktop ? 'WASAPI' : 'Web Audio'} · {pipeline.activeDeviceName} · {pipeline.shortSubtitle}
                 </span>
               </div>
             </div>
@@ -189,13 +253,15 @@ export default function PlaybackSettingsPage() {
                   <span className={settingsUi.rowText}>
                     <span>Bit-perfect output</span>
                     <span className={settingsUi.rowDetail}>
-                      {snap.bitPerfect.active
-                        ? snap.tapActive
-                          ? `Active via ${snap.bitPerfect.driver} (${snap.bitPerfect.sampleRateHz / 1000} kHz / ${snap.bitPerfect.outputBits}-bit)`
-                          : snap.bitPerfect.exact
-                            ? `Bit-exact via ${snap.bitPerfect.driver} (${snap.bitPerfect.sampleRateHz / 1000} kHz / ${snap.bitPerfect.outputBits}-bit)`
-                            : `DAC ceiling converted with TPDF dither (${snap.bitPerfect.sampleRateHz / 1000} kHz)`
-                        : 'WASAPI Exclusive bypasses the Windows mixer when supported'}
+                      {snap.asioNativeDsd
+                        ? `Native ${snap.codec ?? 'DSD'} via ${snap.bitPerfect.driver ?? 'ASIO Native'} (${(snap.bitPerfect.sampleRateHz / 1_000_000).toFixed(2)} MHz · 1-bit)`
+                        : snap.bitPerfect.active
+                          ? snap.tapActive
+                            ? `Active via ${snap.bitPerfect.driver} (${snap.bitPerfect.sampleRateHz / 1000} kHz / ${snap.bitPerfect.outputBits}-bit)`
+                            : snap.bitPerfect.exact
+                              ? `Bit-exact via ${snap.bitPerfect.driver} (${snap.bitPerfect.sampleRateHz / 1000} kHz / ${snap.bitPerfect.outputBits}-bit)`
+                              : `DAC ceiling converted with TPDF dither (${snap.bitPerfect.sampleRateHz / 1000} kHz)`
+                          : 'WASAPI Exclusive or ASIO bypasses the Windows mixer when supported'}
                     </span>
                   </span>
                 </span>
@@ -210,7 +276,10 @@ export default function PlaybackSettingsPage() {
                   onChange={(outputMode) => {
                     if (outputMode === 'shared') {
                       setPendingOutputMode(null);
-                      patchNative({ outputMode });
+                      const nextDeviceId = settings.deviceId?.startsWith('asio:')
+                        ? null
+                        : settings.deviceId;
+                      patchNative({ outputMode, deviceId: nextDeviceId });
                     } else if (outputMode !== settings.outputMode) {
                       setPendingOutputMode(outputMode);
                     }
@@ -221,9 +290,20 @@ export default function PlaybackSettingsPage() {
               {pendingOutputMode && (
                 <BitPerfectConfirmBanner
                   variant="page"
+                  mode={pendingOutputMode === 'asio' ? 'asio' : 'wasapi_exclusive'}
                   onCancel={() => setPendingOutputMode(null)}
                   onConfirm={() => {
-                    patchNative({ outputMode: pendingOutputMode });
+                    if (pendingOutputMode === 'asio') {
+                      const nextDeviceId = settings.deviceId?.startsWith('asio:')
+                        ? settings.deviceId
+                        : (devices.find((d) => d.backend === 'ASIO')?.id ?? settings.deviceId);
+                      patchNative({ outputMode: 'asio', deviceId: nextDeviceId });
+                    } else {
+                      const nextDeviceId = settings.deviceId?.startsWith('asio:')
+                        ? null
+                        : settings.deviceId;
+                      patchNative({ outputMode: pendingOutputMode, deviceId: nextDeviceId });
+                    }
                     setPendingOutputMode(null);
                   }}
                 />
@@ -247,7 +327,17 @@ export default function PlaybackSettingsPage() {
                         label: `${d.name} (${d.backend})`,
                       })),
                     ]}
-                    onChange={(v) => patchNative({ deviceId: v === '__default__' ? null : v })}
+                    onChange={(v) => {
+                      const nextId = v === '__default__' ? null : v;
+                      if (nextId?.startsWith('asio:')) {
+                        setPendingOutputMode(null);
+                        patchNative({ deviceId: nextId, outputMode: 'asio' });
+                      } else if (settings.outputMode === 'asio') {
+                        patchNative({ deviceId: nextId, outputMode: 'shared' });
+                      } else {
+                        patchNative({ deviceId: nextId });
+                      }
+                    }}
                   />
                   <button
                     type="button"
@@ -259,6 +349,110 @@ export default function PlaybackSettingsPage() {
                   </button>
                 </span>
               </label>
+
+              {asioModeActive && (
+                <>
+                  <label className={settingsUi.controlRow}>
+                    <span className={settingsUi.rowText}>
+                      <span>ASIO buffer size</span>
+                      <span className={`${settingsUi.rowDetail} tabular-nums`}>
+                        {activeBufferSamples
+                          ? `${activeBufferSamples} samples${bufferLatencyMs ? ` (~${bufferLatencyMs} ms)` : ''}${asioCaps?.sampleTypeName ? ` · ${asioCaps.sampleTypeName}` : ''}`
+                          : 'Uses the buffer size configured by the ASIO driver'}
+                      </span>
+                    </span>
+                    <Select<string>
+                      label="ASIO buffer size"
+                      value={settings.asioBufferSamples ? String(settings.asioBufferSamples) : 'auto'}
+                      options={asioBufferOptions}
+                      onChange={(v) =>
+                        patchNative({ asioBufferSamples: v === 'auto' ? null : Number(v) })
+                      }
+                    />
+                  </label>
+
+                  {asioClockSources.length > 0 && (
+                    <label className={settingsUi.controlRow}>
+                      <span className={settingsUi.rowText}>
+                        <span>ASIO clock source</span>
+                        <span className={settingsUi.rowDetail}>
+                          {asioClockSources.find(
+                            (c) =>
+                              (snap.asioActiveClockSource != null &&
+                                c.index === snap.asioActiveClockSource) ||
+                              c.isCurrent,
+                          )?.name ?? 'Select the master clock source exposed by the ASIO driver'}
+                        </span>
+                      </span>
+                      <Select<string>
+                        label="ASIO clock source"
+                        value={
+                          settings.asioClockSource != null
+                            ? String(settings.asioClockSource)
+                            : 'auto'
+                        }
+                        options={[
+                          { value: 'auto', label: 'Driver Default' },
+                          ...asioClockSources.map((src) => ({
+                            value: String(src.index),
+                            label: src.name,
+                          })),
+                        ]}
+                        onChange={(v) =>
+                          patchNative({ asioClockSource: v === 'auto' ? null : Number(v) })
+                        }
+                      />
+                    </label>
+                  )}
+
+                  <div className={settingsUi.controlRow}>
+                    <span className={settingsUi.rowText}>
+                      <span>ASIO driver &amp; Native DSD</span>
+                      <span className={settingsUi.rowDetail}>
+                        {asioCapQuery.isLoading
+                          ? 'Inspecting ASIO driver capabilities...'
+                          : asioCapQuery.error
+                            ? `Driver notice: ${asioCapQuery.error instanceof Error ? asioCapQuery.error.message : String(asioCapQuery.error)}`
+                            : asioCaps
+                              ? (() => {
+                                  const dsdCeiling = formatDsdCeiling(asioCaps.maxDsdRateHz);
+                                  const dsdText = asioCaps.supportsNativeDsd
+                                    ? `Native DSD${dsdCeiling ? ` up to ${dsdCeiling}` : ' supported'}`
+                                    : 'PCM bit-perfect';
+                                  const bufText =
+                                    asioCaps.maxBufferSamples > 0
+                                      ? ` · Buffer ${asioCaps.minBufferSamples}-${asioCaps.maxBufferSamples}`
+                                      : '';
+                                  return `${asioCaps.name} · ${dsdText}${bufText}`;
+                                })()
+                              : 'Open the hardware control panel to adjust latency or DSD mode'}
+                      </span>
+                      {asioPanelError && (
+                        <span className="mt-1 block type-footnote text-destructive">
+                          {asioPanelError}
+                        </span>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAsioPanelError(null);
+                        void desktopApi
+                          .audioOpenAsioControlPanel(settings.deviceId)
+                          .catch((err) => {
+                            setAsioPanelError(
+                              err instanceof Error ? err.message : 'Unable to open ASIO Control Panel',
+                            );
+                          });
+                      }}
+                      className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-quaternary px-3.5 py-1.5 type-footnote-emphasized text-primary transition-colors hover:bg-tertiary"
+                    >
+                      <span>Open Panel</span>
+                      <ExternalLink size={13} aria-hidden="true" />
+                    </button>
+                  </div>
+                </>
+              )}
             </>
           ) : (
             <button

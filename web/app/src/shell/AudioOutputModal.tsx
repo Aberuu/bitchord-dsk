@@ -3,6 +3,7 @@ import {
   Bluetooth,
   Check,
   ChevronRight,
+  ExternalLink,
   Headphones,
   MonitorSpeaker,
   RefreshCw,
@@ -15,7 +16,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { BitPerfectConfirmBanner } from '@/desktop/BitPerfectBypass';
 import { isExclusiveOutputMode } from '@/desktop/bitPerfectMode';
-import type { AudioDeviceKind, OutputMode } from '@/desktop/tauriBridge';
+import { desktopApi, type AudioDeviceKind, type OutputMode } from '@/desktop/tauriBridge';
 import { useAudioPipeline } from '@/desktop/useAudioPipeline';
 import { useDesktopAudioDevices } from '@/desktop/useDesktopAudioDevices';
 import { usePlayer } from '@/state/player';
@@ -55,6 +56,7 @@ function AudioOutputModalContent() {
   });
   const closeRef = useRef<HTMLButtonElement>(null);
   const [confirmExclusiveOpen, setConfirmExclusiveOpen] = useState(false);
+  const [asioPanelError, setAsioPanelError] = useState<string | null>(null);
 
   useEffect(() => {
     closeRef.current?.focus({ preventScroll: true });
@@ -84,6 +86,15 @@ function AudioOutputModalContent() {
 
   const selectDevice = (deviceId: string | null) => {
     if (!settings || deviceId === activeDeviceId) return;
+    setAsioPanelError(null);
+    if (deviceId?.startsWith('asio:')) {
+      updateAudio.mutate({ ...settings, deviceId, outputMode: 'asio' });
+      return;
+    }
+    if (activeMode === 'asio') {
+      updateAudio.mutate({ ...settings, deviceId, outputMode: 'shared' });
+      return;
+    }
     updateAudio.mutate({ ...settings, deviceId });
   };
 
@@ -91,7 +102,8 @@ function AudioOutputModalContent() {
     if (!settings) return;
     if (isExclusiveOutputMode(activeMode)) {
       setConfirmExclusiveOpen(false);
-      updateAudio.mutate({ ...settings, outputMode: 'shared' });
+      const resetDeviceId = activeDeviceId?.startsWith('asio:') ? null : activeDeviceId;
+      updateAudio.mutate({ ...settings, deviceId: resetDeviceId, outputMode: 'shared' });
       return;
     }
     setConfirmExclusiveOpen((open) => !open);
@@ -101,6 +113,15 @@ function AudioOutputModalContent() {
     if (!settings) return;
     setConfirmExclusiveOpen(false);
     updateAudio.mutate({ ...settings, outputMode: 'wasapi_exclusive' });
+  };
+
+  const openAsioControlPanel = async () => {
+    setAsioPanelError(null);
+    try {
+      await desktopApi.audioOpenAsioControlPanel(activeDeviceId);
+    } catch (err) {
+      setAsioPanelError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const level = muted ? 0 : volume;
@@ -224,13 +245,17 @@ function AudioOutputModalContent() {
                 className="flex w-full items-center justify-between gap-3 rounded-[16px] bg-white/7 px-3.5 py-3 text-start transition-colors hover:bg-white/11"
               >
                 <span className="flex min-w-0 flex-col">
-                  <span className="type-body-emphasized text-white">WASAPI Exclusive (Bit-Perfect)</span>
+                  <span className="type-body-emphasized text-white">
+                    {activeMode === 'asio' ? 'ASIO Native (Bit-Perfect)' : 'WASAPI Exclusive (Bit-Perfect)'}
+                  </span>
                   <span className="truncate type-callout text-white/60">
                     {fallbackReason
                       ? fallbackReason
                       : bitPerfectActive
                         ? bitPerfectExact
-                          ? `Bit-exact · ${(snap.bitPerfect.sampleRateHz / 1000).toFixed(1).replace(/\.0$/, '')} kHz / ${snap.bitPerfect.outputBits}-bit`
+                          ? snap.asioNativeDsd
+                            ? `Native DSD · ${(snap.bitPerfect.sampleRateHz / 1_000_000).toFixed(2)} MHz`
+                            : `Bit-exact · ${(snap.bitPerfect.sampleRateHz / 1000).toFixed(1).replace(/\.0$/, '')} kHz / ${snap.bitPerfect.outputBits}-bit`
                           : `Active (${snap.bitPerfect.driver ?? 'WASAPI Exclusive'} · ${(snap.bitPerfect.sampleRateHz / 1000).toFixed(1).replace(/\.0$/, '')} kHz / ${snap.bitPerfect.outputBits}-bit)`
                         : isExclusiveOutputMode(activeMode)
                           ? 'Armed for active playback on compatible DACs'
@@ -247,6 +272,25 @@ function AudioOutputModalContent() {
                   {bitPerfectExact ? 'Exact' : isExclusiveOutputMode(activeMode) ? 'On' : 'Off'}
                 </span>
               </button>
+
+              {activeMode === 'asio' && (
+                <button
+                  type="button"
+                  onClick={() => void openAsioControlPanel()}
+                  className="flex w-full items-center justify-between gap-3 rounded-[16px] bg-white/7 px-3.5 py-2.5 text-start transition-colors hover:bg-white/11"
+                >
+                  <span className="flex min-w-0 flex-col">
+                    <span className="type-callout-emphasized text-white">ASIO Control Panel</span>
+                    <span className="truncate type-caption-1 text-white/60">
+                      {asioPanelError ??
+                        (snap.asioBufferSamples
+                          ? `${snap.asioBufferSamples} samples · ${snap.asioSampleType ?? 'Native ASIO'}`
+                          : 'Configure DAC buffer size and clock source')}
+                    </span>
+                  </span>
+                  <ExternalLink size={15} className="flex-none text-white/60" aria-hidden="true" />
+                </button>
+              )}
 
               {confirmExclusiveOpen && (
                 <BitPerfectConfirmBanner

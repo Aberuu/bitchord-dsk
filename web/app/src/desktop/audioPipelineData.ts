@@ -138,7 +138,9 @@ export function buildAudioPipelineData(input: PipelineInput): AudioPipelineSumma
       : NONE;
 
   const decoderName = nativeActive
-    ? 'Symphonia Native Decoder (Rust)'
+    ? nativeSnapshot.asioNativeDsd
+      ? 'Native DSD Direct Bitstream (ASIO)'
+      : 'Symphonia Native Decoder (Rust)'
     : nowPlaying
       ? codec.toLowerCase().includes('aac') || codec.toLowerCase().includes('mp4')
         ? 'Chromium / WebView2 AAC Decoder'
@@ -146,7 +148,11 @@ export function buildAudioPipelineData(input: PipelineInput): AudioPipelineSumma
       : 'Standby';
 
   const decoderFormat =
-    outputPrecision === 'float32' ? '32-bit float PCM' : '16-bit PCM';
+    nativeActive && nativeSnapshot.asioNativeDsd
+      ? '1-bit Native DSD Bitstream'
+      : outputPrecision === 'float32'
+        ? '32-bit float PCM'
+        : '16-bit PCM';
 
   const selectedDeviceId = nativeSnapshot?.settings.deviceId ?? null;
   const matchedDevice =
@@ -268,7 +274,9 @@ export function buildAudioPipelineData(input: PipelineInput): AudioPipelineSumma
         : 'Shared Mixed Path (Windows Audio Engine)';
 
   const outputFormatText = bitPerfect?.active
-    ? `PCM${bitPerfect.outputBits} / ${formatSampleRate(bitPerfect.sampleRateHz)}`
+    ? nativeSnapshot?.asioNativeDsd
+      ? `Native DSD (1-bit / ${(bitPerfect.sampleRateHz / 1_000_000).toFixed(2)} MHz)`
+      : `PCM${bitPerfect.outputBits} / ${formatSampleRate(bitPerfect.sampleRateHz)}`
     : `${outputPrecision === 'float32' ? 'Float32' : 'PCM16'} / ${formatSampleRate(outRateHz)}`;
 
   const systemMixerText = bitPerfect?.active
@@ -287,6 +295,22 @@ export function buildAudioPipelineData(input: PipelineInput): AudioPipelineSumma
     { label: 'Output', value: outputFormatText },
     { label: 'System', value: systemMixerText },
   ];
+
+  if (nativeSnapshot?.asioBufferSamples) {
+    const latencyMs =
+      bitPerfect?.sampleRateHz && bitPerfect.sampleRateHz > 0
+        ? ((nativeSnapshot.asioBufferSamples / bitPerfect.sampleRateHz) * 1000).toFixed(1)
+        : null;
+    outputRows.push({
+      label: 'ASIO Buffer',
+      value: latencyMs
+        ? `${nativeSnapshot.asioBufferSamples} samples (~${latencyMs} ms)`
+        : `${nativeSnapshot.asioBufferSamples} samples`,
+    });
+  }
+  if (nativeSnapshot?.asioSampleType) {
+    outputRows.push({ label: 'ASIO Format', value: nativeSnapshot.asioSampleType });
+  }
 
   if (bitPerfect?.fallbackReason) {
     outputRows.push({ label: 'Fallback', value: bitPerfect.fallbackReason });
