@@ -4,8 +4,8 @@
 
 **A modern, lightweight YouTube Music desktop player for Windows, engineered with Rust and Tauri 2.**
 
-[![Release](https://img.shields.io/badge/Release-v0.8.0--beta.808-f59e0b?logo=github&logoColor=white)](https://github.com/Aberuu/bitchord-dsk/releases)
-[![Status](https://img.shields.io/badge/Status-Beta%20Testing-blueviolet)]()
+[![Release](https://img.shields.io/badge/Release-v1.0.0-10b981?logo=github&logoColor=white)](https://github.com/Aberuu/bitchord-dsk/releases)
+[![Status](https://img.shields.io/badge/Status-v1.0.0%20Release-brightgreen)]()
 [![Rust](https://img.shields.io/badge/Rust-2021%20Edition-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-v2-24C8D8?logo=tauri&logoColor=white)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-v19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
@@ -16,10 +16,10 @@
 
 ---
 
-> [!WARNING]
-> ### 🧪 Beta Testing Notice (`v0.8.0-beta.808`)
-> **BitChord Desktop is currently in public Beta Testing.**
-> While the core playback pipeline, 10-band Web Audio EQ, audio device hotplugging, synced lyrics, listening analytics, and Windows shell integrations are functional, you may encounter occasional edge cases or visual quirks. Feedback, bug reports, and suggestions are welcome!
+> [!NOTE]
+> ### 🎉 Release `v1.0.0`
+> **BitChord Desktop v1.0.0 is now available for Windows!**
+> Full native Rust/Tauri 2 playback pipeline (CPAL/WASAPI/ASIO & DSD DoP), Bit-Perfect bypass, 10-band Web Audio EQ, synced lyrics, listening stats & Replay, CastV2/DLNA, external sources (`core-sources`), mobile sync, auto-updater, and deep Windows integration.
 
 ---
 
@@ -29,25 +29,25 @@
 
 ---
 
-## 🚦 Release & Feature Status (Beta v0.8.0-beta.808)
+## 🚦 Release & Feature Status (`v1.0.0`)
 
 | Feature | Status | Notes |
 |---|---|---|
-| **Audio Playback Engine** | 🟢 Beta Ready | Low-latency Symphonia decoding + CPAL/WASAPI/ASIO & DSD (DoP) audio output |
-| **Audio Device Hotplugging**| 🟢 Beta Ready | Dynamic runtime device detection, hot-swap, and device selection modal |
-| **Web Audio 10-Band EQ** | 🟢 Beta Ready | 10 frequency bands, pre-amp control, and built-in genre presets |
-| **Audio Pipeline Inspector**| 🟢 Beta Ready | Real-time monitoring of sample rate, channels, bit depth, and buffer size |
-| **Synced Lyrics** | 🟢 Beta Ready | Side panel drawer & full-screen view (LRCLIB, Kugou, YouTube captions) |
-| **Windows SMTC Integration**| 🟢 Beta Ready | Hardware media keys, volume overlay, and taskbar thumbnail previews |
-| **Windows DPAPI Security** | 🟢 Beta Ready | Hardware-backed `CryptProtectData` encryption for YouTube session tokens |
-| **Listening Stats & Replay** | 🟢 Beta Ready | SQLite-backed listening tracker, top songs/artists, and Replay cards |
-| **Search & UpNext Queue** | 🟢 Beta Ready | Search options, shortcut quick-select, and dynamic queue timeline |
-| **Listen Together & Mobile Sync** | 🟢 Beta Ready | WebSocket party synchronization, clock drift compensation, and mobile playback/stats sync |
-| **Auto-Updater & Version Gate** | 🟢 Beta Ready | Built-in update checker, banner, and version gate (`updater.rs`) |
-| **Cast (CastV2 & DLNA)** | 🟢 Beta Ready | Device discovery, media relay, and CastModal playback controls |
-| **External Sources** | 🟢 Beta Ready | `core-sources` integration for WebDAV, SMB, JioSaavn, and addons |
-| **System Tray Preferences**| 🟢 Beta Ready | Configurable close-to-tray behavior and tray controls |
-| **Offline Downloads** | ⚪ In Progress | Local audio storage with ID3 metadata embedding (Planned for v0.2.0) |
+| **Audio Playback Engine** | 🟢 Ready | Low-latency Symphonia decoding + CPAL/WASAPI/ASIO & DSD (DoP) audio output |
+| **Audio Device Hotplugging**| 🟢 Ready | Dynamic runtime device detection, hot-swap, and device selection modal |
+| **Web Audio 10-Band EQ** | 🟢 Ready | 10 frequency bands, pre-amp control, and built-in genre presets |
+| **Audio Pipeline Inspector**| 🟢 Ready | Real-time monitoring of sample rate, channels, bit depth, and buffer size |
+| **Synced Lyrics** | 🟢 Ready | Side panel drawer & full-screen view (LRCLIB, Kugou, YouTube captions) |
+| **Windows SMTC Integration**| 🟢 Ready | Hardware media keys, volume overlay, and taskbar thumbnail previews |
+| **Windows DPAPI Security** | 🟢 Ready | Hardware-backed `CryptProtectData` encryption for YouTube session tokens |
+| **Listening Stats & Replay** | 🟢 Ready | SQLite-backed listening tracker, top songs/artists, and Replay cards |
+| **Search & UpNext Queue** | 🟢 Ready | Search options, shortcut quick-select, and dynamic queue timeline |
+| **Listen Together & Mobile Sync** | 🟢 Ready | WebSocket party synchronization, clock drift compensation, and mobile playback/stats sync |
+| **Auto-Updater & Version Gate** | 🟢 Ready | Built-in update checker, banner, and version gate (`updater.rs`) |
+| **Cast (CastV2 & DLNA)** | 🟢 Ready | Device discovery, media relay, and CastModal playback controls |
+| **External Sources** | 🟢 Ready | `core-sources` integration for WebDAV, SMB, JioSaavn, and addons |
+| **System Tray Preferences**| 🟢 Ready | Configurable close-to-tray behavior and tray controls |
+| **Offline Downloads** | 🟢 Ready | Local audio caching & metadata tagging (`core-downloads`) |
 
 ---
 
@@ -236,10 +236,10 @@ Untuk menghasilkan bundle installer mandiri (`.msi` dan `.exe`):
 cargo tauri build
 ```
 
-Setelah proses kompilasi selesai, file installer installer siap pakai dapat ditemukan di:
+Setelah proses kompilasi selesai, file installer siap pakai dapat ditemukan di:
 ```
-src-tauri/target/release/bundle/msi/
-src-tauri/target/release/bundle/nsis/
+target/release/bundle/msi/
+target/release/bundle/nsis/
 ```
 
 ---
@@ -260,7 +260,13 @@ src-tauri/target/release/bundle/nsis/
 
 ## 📦 Release History
 
-### `v0.8.0-beta.808` (Current - Beta Testing)
+### `v1.0.0` (Current Release)
+- **Full Desktop Release:** Production-ready Windows installers (`.msi` and `.exe` NSIS).
+- **Audio & Playback:** ASIO & DSD/DoP support, Bit-Perfect bypass mode, audio device hotplugging, audio tap worklet, direct stream resolver, and seamless source switching / quality upgrade.
+- **Casting & External Sources:** CastV2 & DLNA casting (`CastModal`), `core-sources` (WebDAV, SMB, JioSaavn, FLAC addon), and system tray preferences.
+- **Sync, Updates & UI:** Mobile playback/stats sync (`mobile_sync.rs`), built-in auto-updater / version gate (`updater.rs`), customizable shortcuts (`ShortcutsModal`), collapsible sidebar, Developer Watermark, and custom scrollbar styling.
+
+### `v0.8.0-beta.808`
 - **Audio & Playback:** Added ASIO output (`asio.rs`) and DSD/DoP enhancements (`dsd.rs`), Bit-Perfect bypass mode (disables Web Audio EQ & software volume for bit-exact DAC output), audio device hotplugging, audio tap worklet, direct stream resolver, and seamless source switching / quality upgrade.
 - **Casting & External Sources:** Added CastV2 & DLNA casting (`CastModal`), `core-sources` (WebDAV, SMB, JioSaavn, FLAC addon via `scripts/run-flac-addon.ps1`), and system tray close-behavior preferences.
 - **UI & Shell:** Added Developer Watermark, collapsible sidebar toggle with keyboard shortcut (`SidebarToggleButton`), customizable keyboard shortcuts modal (`ShortcutsModal`), refined `TitleBar`, `AppShell`, `FullScreenPlayer`, and custom scrollbar styling.

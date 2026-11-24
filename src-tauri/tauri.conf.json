@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "BitChord",
-  "version": "0.8.0-beta.808",
+  "version": "1.0.0",
   "identifier": "in.bitchord.desktop",
   "build": {
-    "beforeDevCommand": "pnpm --dir web --filter @bitchord/app dev",
+    "beforeDevCommand": "pnpm --dir ../web --filter @bitchord/app dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "pnpm --dir web --filter @bitchord/app build",
+    "beforeBuildCommand": "pnpm --dir ../web --filter @bitchord/app build",
     "frontendDist": "../web/app/dist"
   },
   "app": {
