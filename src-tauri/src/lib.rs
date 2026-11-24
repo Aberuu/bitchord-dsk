@@ -59,7 +59,22 @@ pub async fn shutdown_and_exit(app: &AppHandle) {
     app.exit(0);
 }
 
+#[cfg(target_os = "windows")]
+fn set_windows_app_user_model_id() {
+    #[link(name = "shell32")]
+    extern "system" {
+        fn SetCurrentProcessExplicitAppUserModelID(app_id: *const u16) -> i32;
+    }
+    let wide: Vec<u16> = "in.bitchord.desktop\0".encode_utf16().collect();
+    unsafe {
+        let _ = SetCurrentProcessExplicitAppUserModelID(wide.as_ptr());
+    }
+}
+
 pub fn run() {
+    #[cfg(target_os = "windows")]
+    set_windows_app_user_model_id();
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
         .init();

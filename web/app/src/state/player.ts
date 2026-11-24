@@ -173,6 +173,11 @@ interface PlayerState extends Settings {
 }
 
 const SETTINGS_KEY = 'bitchord:player';
+const SESSION_KEY = 'bitchord:playback-session';
+const MAX_PERSISTED_QUEUE = 80;
+const SESSION_SAVE_DEBOUNCE_MS = 400;
+const SESSION_PLAYING_TICK_MS = 5000;
+
 const DEFAULT_SETTINGS: Settings = {
   shuffle: false,
   repeat: 'off',
@@ -188,7 +193,7 @@ const DEFAULT_SETTINGS: Settings = {
   eq: DEFAULT_EQ_CONFIG,
   balance: 0,
   outputPrecision: 'float32',
-  preferUsbDac: true,
+  preferUsbDac: false,
   loudnessNormalization: true,
   skipSilence: false,
   spatialAudio: false,
@@ -198,6 +203,7 @@ const DEFAULT_SETTINGS: Settings = {
 
 interface PersistedSettings extends Partial<Settings> {
   directSourceStreamMigratedV2?: boolean;
+  preferUsbDacDefaultOffV2?: boolean;
 }
 
 function loadSettings(): Settings {
@@ -206,13 +212,20 @@ function loadSettings(): Settings {
     const migratedDirect = parsed.directSourceStreamMigratedV2
       ? (parsed.directSourceStream ?? false)
       : false;
+    const migratedPreferUsb = parsed.preferUsbDacDefaultOffV2
+      ? (parsed.preferUsbDac ?? false)
+      : false;
     const resolved: Settings = {
       ...DEFAULT_SETTINGS,
       ...parsed,
       directSourceStream: migratedDirect,
+      preferUsbDac: migratedPreferUsb,
       eq: { ...DEFAULT_EQ_CONFIG, ...(parsed.eq ?? {}) },
     };
-    if (!parsed.directSourceStreamMigratedV2 && localStorage.getItem(SETTINGS_KEY) !== null) {
+    if (
+      (!parsed.directSourceStreamMigratedV2 || !parsed.preferUsbDacDefaultOffV2) &&
+      localStorage.getItem(SETTINGS_KEY) !== null
+    ) {
       saveSettings(resolved);
     }
     return resolved;
@@ -262,6 +275,7 @@ function saveSettings(state: Settings) {
       balance,
       outputPrecision,
       preferUsbDac,
+      preferUsbDacDefaultOffV2: true,
       loudnessNormalization,
       skipSilence,
       spatialAudio,
@@ -270,6 +284,83 @@ function saveSettings(state: Settings) {
       streamingQuality,
     }),
   );
+}
+
+interface PersistedPlaybackSession {
+  version: 1;
+  queue: QueueEntry[];
+  index: number;
+  nowPlaying: NowPlaying | null;
+  positionSec: number;
+  updatedAtMs: number;
+}
+
+function sanitizePersistedSession(
+  raw: unknown,
+): { queue: QueueEntry[]; index: number; nowPlaying: NowPlaying | null; positionSec: number } {
+  if (!raw || typeof raw !== 'object') {
+    return { queue: [], index: -1, nowPlaying: null, positionSec: 0 };
+  }
+  const obj = raw as Partial<PersistedPlaybackSession>;
+  if (!Array.isArray(obj.queue) || obj.queue.length === 0) {
+    return { queue: [], index: -1, nowPlaying: null, positionSec: 0 };
+  }
+  const validQueue = obj.queue.filter(
+    (entry): entry is QueueEntry =>
+      Boolean(
+        entry &&
+          typeof entry === 'object' &&
+          typeof entry.entryId === 'string' &&
+          entry.track &&
+          typeof entry.track.videoId === 'string' &&
+          typeof entry.track.title === 'string',
+      ),
+  );
+  if (!validQueue.length || typeof obj.index !== 'number' || obj.index < 0 || obj.index >= validQueue.length) {
+    return { queue: [], index: -1, nowPlaying: null, positionSec: 0 };
+  }
+  const activeEntry = validQueue[obj.index]!;
+  const pos =
+    typeof obj.positionSec === 'number' && Number.isFinite(obj.positionSec) && obj.positionSec > 0
+      ? obj.positionSec
+      : 0;
+  const savedNp = obj.nowPlaying;
+  const restoredNp: NowPlaying =
+    savedNp && savedNp.videoId === activeEntry.track.videoId
+      ? {
+          videoId: activeEntry.track.videoId,
+          title: savedNp.title || activeEntry.track.title,
+          artist:
+            savedNp.artist ||
+            activeEntry.track.artists.map((a) => a.name).join(', '),
+          artworkUrl: savedNp.artworkUrl ?? activeEntry.track.thumbnail ?? null,
+          durationSec:
+            typeof savedNp.durationSec === 'number' && savedNp.durationSec > 0
+              ? savedNp.durationSec
+              : (activeEntry.track.durationSec ?? 0),
+          streamInfo: null,
+          stream: null,
+        }
+      : hintOf(activeEntry.track);
+  const boundedPos =
+    restoredNp.durationSec > 0 ? Math.min(pos, restoredNp.durationSec) : pos;
+
+  return {
+    queue: validQueue,
+    index: obj.index,
+    nowPlaying: restoredNp,
+    positionSec: boundedPos,
+  };
+}
+
+function loadPlaybackSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return { queue: [] as QueueEntry[], index: -1, nowPlaying: null as NowPlaying | null, positionSec: 0 };
+    return sanitizePersistedSession(JSON.parse(raw));
+  } catch {
+    return { queue: [] as QueueEntry[], index: -1, nowPlaying: null as NowPlaying | null, positionSec: 0 };
+  }
 }
 
 // ---- Decks: two engines, so a crossfade can play the next track under this one ------------
@@ -365,6 +456,9 @@ export function getPlayhead(): { sec: number; paused: boolean } | null {
   }
   const front = decks?.[active];
   if (!front || front.loadedTrackId !== nowPlaying.videoId) {
+    if (restoredPositionSec !== null) {
+      return { sec: restoredPositionSec, paused: true };
+    }
     return { sec: pendingStartSec, paused: true };
   }
   return { sec: front.audio.currentTime, paused: front.audio.paused };
@@ -831,13 +925,84 @@ const intent = () => partyHooks?.onIntent();
 let loadToken = 0;
 /** Canonical positions of the queue before shuffle, for turning it off again. */
 let canonical: Map<string, number> | null = null;
+const initialSession = loadPlaybackSession();
+let restoredPositionSec: number | null =
+  initialSession.nowPlaying ? initialSession.positionSec : null;
+let sessionSaveTimer = 0;
+
+export function flushPlaybackSession(): void {
+  if (sessionSaveTimer) {
+    window.clearTimeout(sessionSaveTimer);
+    sessionSaveTimer = 0;
+  }
+  if (partyHooks?.inParty()) return;
+  try {
+    const { queue, index, nowPlaying } = usePlayer.getState();
+    if (!queue.length || index < 0 || !nowPlaying) {
+      localStorage.removeItem(SESSION_KEY);
+      return;
+    }
+    let sliceStart = 0;
+    let sliceEnd = queue.length;
+    if (queue.length > MAX_PERSISTED_QUEUE) {
+      sliceStart = Math.max(0, Math.min(index - 20, queue.length - MAX_PERSISTED_QUEUE));
+      sliceEnd = sliceStart + MAX_PERSISTED_QUEUE;
+    }
+    const slicedQueue = queue.slice(sliceStart, sliceEnd);
+    const savedIndex = index - sliceStart;
+    const headSec = getPlayhead()?.sec;
+    const positionSec =
+      typeof headSec === 'number' && Number.isFinite(headSec) && headSec >= 0
+        ? headSec
+        : (restoredPositionSec ?? 0);
+
+    const payload: PersistedPlaybackSession = {
+      version: 1,
+      queue: slicedQueue,
+      index: savedIndex,
+      nowPlaying,
+      positionSec,
+      updatedAtMs: Date.now(),
+    };
+    localStorage.setItem(SESSION_KEY, JSON.stringify(payload));
+  } catch {
+    // Storage unavailable or quota exceeded.
+  }
+}
+
+function schedulePlaybackSessionSave(): void {
+  if (sessionSaveTimer) return;
+  sessionSaveTimer = window.setTimeout(() => {
+    sessionSaveTimer = 0;
+    flushPlaybackSession();
+  }, SESSION_SAVE_DEBOUNCE_MS);
+}
+
+export function hydratePlaybackSessionFromStorage(): boolean {
+  const restored = loadPlaybackSession();
+  if (!restored.nowPlaying || restored.index < 0 || !restored.queue.length) {
+    return false;
+  }
+  restoredPositionSec = restored.positionSec;
+  usePlayer.setState({
+    queue: restored.queue,
+    index: restored.index,
+    nowPlaying: restored.nowPlaying,
+    status: 'paused',
+    error: null,
+    nativeActive: false,
+    nativePlayhead: null,
+  });
+  updateMediaSession(restored.nowPlaying);
+  return true;
+}
 
 export const usePlayer = create<PlayerState>()((set, get) => ({
   ...loadSettings(),
-  queue: [],
-  index: -1,
-  nowPlaying: null,
-  status: 'idle',
+  queue: initialSession.queue,
+  index: initialSession.index,
+  nowPlaying: initialSession.nowPlaying,
+  status: initialSession.nowPlaying ? 'paused' : 'idle',
   error: null,
   deck: 0,
   automixState: null,
@@ -1026,14 +1191,17 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
     // A loop mix holds both elements paused: settle it onto a playing song first.
     if (graph?.dj.loopMixing) cancelCrossfade();
     const audio = getAudio();
-    const resuming = !audio || audio.paused || status === 'error';
+    const hasLoadedAudio = Boolean(audio && decks?.[active]?.loadedTrackId === nowPlaying.videoId);
+    const resuming = !hasLoadedAudio || !audio || audio.paused || status === 'error';
     // A routed graph left suspended (no gesture when it was built) would play silence.
     if (resuming) void graph?.ctx.resume();
     // A listener in a party the host has locked: the press moves this device alone.
     if (partyHooks?.onLockedTransport(resuming)) return;
-    if (!audio || status === 'error') {
-      // A stopped or failed track starts again from where it was.
-      void startAt(index, { startSec: audio?.currentTime ?? 0 });
+    if (!hasLoadedAudio || !audio || status === 'error') {
+      // A stopped, failed, or restored session track starts again from its saved timestamp.
+      const startSec = restoredPositionSec ?? (hasLoadedAudio ? (audio?.currentTime ?? 0) : 0);
+      restoredPositionSec = null;
+      void startAt(index, { startSec });
     } else if (audio.paused) {
       // In a party, a resume waits for the instant the server schedules for everyone.
       if (!partyHooks?.shouldDeferPlay()) void audio.play().catch((e: unknown) => trackLog.w(`play() refused: ${String(e)}`));
@@ -1052,6 +1220,7 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
       const dur = nowPlaying?.durationSec ?? seconds;
       const clamped = Math.max(0, Math.min(seconds, dur || seconds));
       castHooks.seek(clamped);
+      flushPlaybackSession();
       intent();
       return;
     }
@@ -1070,16 +1239,26 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
           paused: status !== 'playing',
         },
       });
+      flushPlaybackSession();
       intent();
       return;
     }
     const audio = getAudio();
-    if (!audio) return;
+    if (!audio || (nowPlaying && decks?.[active]?.loadedTrackId !== nowPlaying.videoId)) {
+      if (restoredPositionSec !== null && nowPlaying) {
+        const dur = nowPlaying.durationSec || seconds;
+        restoredPositionSec = Math.max(0, Math.min(seconds, dur > 0 ? dur : seconds));
+        flushPlaybackSession();
+        intent();
+      }
+      return;
+    }
     cancelQualityUpgrade();
     cancelCrossfade();
     audio.currentTime = Math.max(0, Math.min(seconds, audio.duration || seconds));
     graph?.tap?.flush();
     updatePositionState();
+    flushPlaybackSession();
     intent();
   },
 
@@ -1875,6 +2054,7 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
   const state = usePlayer.getState();
   const entry = state.queue[at];
   if (!entry) return;
+  restoredPositionSec = null;
   cancelQualityUpgrade();
   cancelCrossfade();
   const token = ++loadToken;
@@ -2678,3 +2858,28 @@ export const partyPlayer = {
     usePlayer.setState({ queue: [...queue.slice(0, index + 1), ...tracks.map((t, i) => asEntry(t, tiers[i] ?? 'user', PARTY_SOURCE))] });
   },
 };
+
+if (typeof window !== 'undefined') {
+  usePlayer.subscribe((state, prev) => {
+    if (
+      state.queue !== prev.queue ||
+      state.index !== prev.index ||
+      state.nowPlaying?.videoId !== prev.nowPlaying?.videoId ||
+      state.nowPlaying?.durationSec !== prev.nowPlaying?.durationSec ||
+      state.status !== prev.status
+    ) {
+      schedulePlaybackSessionSave();
+    }
+  });
+  window.addEventListener('pagehide', flushPlaybackSession);
+  window.addEventListener('beforeunload', flushPlaybackSession);
+  window.setInterval(() => {
+    if (usePlayer.getState().status === 'playing') {
+      flushPlaybackSession();
+    }
+  }, SESSION_PLAYING_TICK_MS);
+}
+
+if (initialSession.nowPlaying) {
+  updateMediaSession(initialSession.nowPlaying);
+}

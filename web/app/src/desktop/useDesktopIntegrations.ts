@@ -191,7 +191,7 @@ export function useDesktopIntegrations(): void {
       })
       .catch(() => {});
 
-    if (scrobbleRef.current?.videoId !== nowPlaying.videoId) {
+    if (status === 'playing' && scrobbleRef.current?.videoId !== nowPlaying.videoId) {
       const startedAtMs = Date.now();
       scrobbleRef.current = {
         videoId: nowPlaying.videoId,
@@ -211,7 +211,7 @@ export function useDesktopIntegrations(): void {
         })
         .catch(() => {});
     }
-  }, [nowPlaying, queue, index]);
+  }, [nowPlaying, queue, index, status]);
 
   useEffect(() => {
     if (!isTauriDesktop()) return;

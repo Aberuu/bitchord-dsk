@@ -231,7 +231,7 @@ export default function PlaybackSettingsPage() {
           <div className="relative hairline-[16px]">
             <Toggle
               label="Prefer USB DAC"
-              detail="Automatically prioritize connected external USB DACs when available."
+              detail="Off by default so BitChord follows your current Windows output device. Turn on to automatically switch when an external USB DAC connects."
               checked={preferUsbDac}
               onChange={(checked) => {
                 setPreferUsbDac(checked);

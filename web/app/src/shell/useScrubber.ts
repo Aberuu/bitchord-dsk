@@ -79,6 +79,7 @@ export function useScrubber() {
   const deck = usePlayer((s) => s.deck);
   const mixing = usePlayer((s) => s.mixing);
   const nativeActive = usePlayer((s) => s.nativeActive);
+  const trackId = usePlayer((s) => s.nowPlaying?.videoId ?? null);
   const trackDurationSec = usePlayer((s) => s.nowPlaying?.durationSec ?? 0);
   const seek = usePlayer((s) => s.seek);
   const [dragging, setDragging] = useState<number | null>(null);
@@ -86,10 +87,16 @@ export function useScrubber() {
   useEffect(() => {
     const audio = getAudio();
     const element = bar.current;
-    if (!element || (!audio && !nativeActive)) return;
+    const restoredHead = getPlayhead();
+    if (!element || (!audio && !nativeActive && !restoredHead)) return;
     let frame = 0;
     const draw = () => {
-      const duration = nativeActive ? trackDurationSec : (audio?.duration ?? 0);
+      const duration =
+        nativeActive || !audio
+          ? trackDurationSec
+          : Number.isFinite(audio.duration) && audio.duration > 0
+            ? audio.duration
+            : trackDurationSec;
       // during a loop mix the element is paused under the decks: the mix's own playhead
       const head = getPlayhead();
       const paused = head?.paused ?? audio?.paused ?? true;
@@ -114,7 +121,7 @@ export function useScrubber() {
       cancelAnimationFrame(frame);
       audio?.removeEventListener('seeked', onSeeked);
     };
-  }, [status, deck, dragging, mixing, nativeActive, trackDurationSec]);
+  }, [status, deck, dragging, mixing, nativeActive, trackId, trackDurationSec]);
 
   const fractionAt = (event: React.PointerEvent<HTMLElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -123,7 +130,8 @@ export function useScrubber() {
 
   const handlers = {
     onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
-      if (!getAudio() && !usePlayer.getState().nativeActive) return;
+      const state = usePlayer.getState();
+      if (!getAudio() && !state.nativeActive && !state.nowPlaying) return;
       e.currentTarget.setPointerCapture(e.pointerId);
       setDragging(fractionAt(e));
     },
@@ -134,7 +142,12 @@ export function useScrubber() {
       if (dragging === null) return;
       const state = usePlayer.getState();
       const audio = getAudio();
-      const duration = state.nativeActive ? (state.nowPlaying?.durationSec ?? 0) : (audio?.duration ?? 0);
+      const duration =
+        state.nativeActive || !audio
+          ? (state.nowPlaying?.durationSec ?? 0)
+          : Number.isFinite(audio.duration) && audio.duration > 0
+            ? audio.duration
+            : (state.nowPlaying?.durationSec ?? 0);
       if (Number.isFinite(duration) && duration > 0) seek(fractionAt(e) * duration);
       setDragging(null);
     },

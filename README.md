@@ -4,8 +4,8 @@
 
 **A modern, lightweight YouTube Music desktop player for Windows, engineered with Rust and Tauri 2.**
 
-[![Release](https://img.shields.io/badge/Release-v1.1.0-10b981?logo=github&logoColor=white)](https://github.com/Aberuu/bitchord-dsk/releases)
-[![Status](https://img.shields.io/badge/Status-v1.1.0%20Release-brightgreen)]()
+[![Release](https://img.shields.io/badge/Release-v1.1.1-10b981?logo=github&logoColor=white)](https://github.com/Aberuu/bitchord-dsk/releases)
+[![Status](https://img.shields.io/badge/Status-v1.1.1%20Release-brightgreen)]()
 [![Rust](https://img.shields.io/badge/Rust-2021%20Edition-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-v2-24C8D8?logo=tauri&logoColor=white)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-v19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
@@ -17,8 +17,8 @@
 ---
 
 > [!NOTE]
-> ### 🎉 Release `v1.1.0`
-> **BitChord Desktop v1.1.0 is now available for Windows!**
+> ### 🎉 Release `v1.1.1`
+> **BitChord Desktop v1.1.1 is now available for Windows!**
 > Full native Rust/Tauri 2 playback pipeline (CPAL/WASAPI/ASIO & DSD DoP), Bit-Perfect bypass, 10-band Web Audio EQ, synced lyrics, listening stats & Replay, CastV2/DLNA, external sources (`core-sources`), mobile sync, auto-updater, and deep Windows integration.
 
 ---
@@ -29,7 +29,7 @@
 
 ---
 
-## 🚦 Release & Feature Status (`v1.1.0`)
+## 🚦 Release & Feature Status (`v1.1.1`)
 
 | Feature | Status | Notes |
 |---|---|---|
@@ -260,7 +260,11 @@ target/release/bundle/nsis/
 
 ## 📦 Release History
 
-### `v1.1.0` (Current Release)
+### `v1.1.1` (Current Release)
+- **Session & Output Defaults:** Refined session & audio output defaults (`player.ts`, `sessionAndOutputDefaults.test.ts`), `useScrubber`, `AppShell`, `routes.tsx`, and Tauri `lib.rs` initialization.
+- **Workspace Customizations:** Added `.agents/rules/push-and-release.md` and `.agents/skills/bitchord-release-build/SKILL.md`.
+
+### `v1.1.0`
 - **Auto-Updater & Release Notes:** Enhanced `updater.rs` and `UpdateBannerAndGate` with rich Markdown release notes rendering (`ReleaseNotesMarkdown`), `TitleBar` update indicator, and `.github/` workflow support.
 
 ### `v1.0.0`
