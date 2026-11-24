@@ -26,5 +26,5 @@ Whenever the user asks to `push` in this repository:
 4. **Commit, Tag & Push:**
    - Stage changes, commit, create annotated tag `vX.Y.Z`, and push `main` + `vX.Y.Z` to `origin`.
 
-5. **Build & GitHub Release (Medium / Mayor or when requested):**
-   - For **Medium** or **Mayor** updates (or when explicitly requested), run the production Windows build using the `bitchord-release-build` skill and publish a GitHub Release (`gh release create vX.Y.Z ...`) with the `.exe` and `.msi` installers attached.
+5. **Always Build & Publish GitHub Release:**
+   - For **every** versioned push (**Minor**, **Medium**, and **Mayor**), run the production Windows build using the `bitchord-release-build` skill and publish a GitHub Release (`gh release create vX.Y.Z ...`) with the `.exe` and `.msi` installers attached.
