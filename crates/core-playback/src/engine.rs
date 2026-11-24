@@ -1,6 +1,6 @@
 use crate::automix_ffi::TimeStretcher;
 use crate::converter::DacFormatConverter;
-use crate::decoder::{decode_file_to_stereo_f32, DecodedAudio};
+use crate::decoder::{decode_bytes_to_stereo_f32, decode_file_to_stereo_f32, DecodedAudio};
 use crate::eq::{EqConfig, EqCurve, EqualizerProcessor};
 use crate::sink::{
     asio_available, find_cpal_device, list_output_devices, probe_wasapi_exclusive_format,
@@ -353,6 +353,24 @@ impl NativeAudioEngine {
 
     pub fn play_local_file(&self, track_id: String, path: PathBuf) -> Result<NativePlaybackSnapshot> {
         let decoded = Arc::new(decode_file_to_stereo_f32(&path)?);
+        self.play_decoded_audio(track_id, decoded)
+    }
+
+    pub fn play_encoded_bytes(
+        &self,
+        track_id: String,
+        bytes: Vec<u8>,
+        ext: Option<&str>,
+    ) -> Result<NativePlaybackSnapshot> {
+        let decoded = Arc::new(decode_bytes_to_stereo_f32(bytes, ext, &track_id)?);
+        self.play_decoded_audio(track_id, decoded)
+    }
+
+    fn play_decoded_audio(
+        &self,
+        track_id: String,
+        decoded: Arc<DecodedAudio>,
+    ) -> Result<NativePlaybackSnapshot> {
         let _route = self.route_lock.lock();
         self.stop_worker_locked();
         self.tap.flush();

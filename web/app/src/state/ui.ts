@@ -16,6 +16,8 @@ interface UiState {
   setAudioOutputOpen: (open: boolean) => void;
   audioPipelineOpen: boolean;
   setAudioPipelineOpen: (open: boolean) => void;
+  castModalOpen: boolean;
+  setCastModalOpen: (open: boolean) => void;
   drawerOpen: boolean;
   setDrawerOpen: (open: boolean) => void;
   installBannerDismissed: boolean;
@@ -24,6 +26,7 @@ interface UiState {
   setTheme: (theme: ThemePreference) => void;
   minimizeToTray: boolean;
   setMinimizeToTray: (enabled: boolean) => void;
+  syncMinimizeToTrayFromDesktop: (enabled: boolean) => void;
 }
 
 const BANNER_KEY = 'bitchord:install-banner-dismissed';
@@ -37,7 +40,7 @@ function readTheme(): ThemePreference {
 
 function readMinimizeToTray(): boolean {
   const saved = localStorage.getItem(TRAY_KEY);
-  return saved === null ? true : saved === '1';
+  return saved === null ? false : saved === '1';
 }
 
 export const useUi = create<UiState>()((set) => ({
@@ -53,6 +56,8 @@ export const useUi = create<UiState>()((set) => ({
   setAudioOutputOpen: (audioOutputOpen) => set({ audioOutputOpen }),
   audioPipelineOpen: false,
   setAudioPipelineOpen: (audioPipelineOpen) => set({ audioPipelineOpen }),
+  castModalOpen: false,
+  setCastModalOpen: (castModalOpen) => set({ castModalOpen }),
   drawerOpen: false,
   setDrawerOpen: (drawerOpen) => set({ drawerOpen }),
   installBannerDismissed: sessionStorage.getItem(BANNER_KEY) === '1',
@@ -70,6 +75,10 @@ export const useUi = create<UiState>()((set) => ({
     localStorage.setItem(TRAY_KEY, enabled ? '1' : '0');
     set({ minimizeToTray: enabled });
     if (isTauriDesktop()) void desktopApi.setMinimizeToTray(enabled).catch(() => {});
+  },
+  syncMinimizeToTrayFromDesktop: (enabled) => {
+    localStorage.setItem(TRAY_KEY, enabled ? '1' : '0');
+    set({ minimizeToTray: enabled });
   },
 }));
 

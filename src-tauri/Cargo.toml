@@ -25,6 +25,7 @@ core-downloads = { path = "../crates/core-downloads" }
 core-integrations = { path = "../crates/core-integrations" }
 core-lyrics = { path = "../crates/core-lyrics" }
 core-playback = { path = "../crates/core-playback" }
+core-sources = { path = "../crates/core-sources" }
 core-stats = { path = "../crates/core-stats" }
 core-youtube = { path = "../crates/core-youtube" }
 directories.workspace = true

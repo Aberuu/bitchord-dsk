@@ -13,6 +13,7 @@ export interface PipelineStreamLike {
   sampleRateHz?: number | null;
   bitrateKbps?: number | null;
   channels?: number | null;
+  client?: string | null;
 }
 
 export interface PipelineNowPlayingLike {
@@ -83,6 +84,8 @@ export function buildAudioPipelineData(input: PipelineInput): AudioPipelineSumma
   } = input;
 
   const isLocal = nowPlaying?.videoId.startsWith('local:') ?? false;
+  const isWebDav = nowPlaying?.videoId.startsWith('webdav:') ?? false;
+  const isSmb = nowPlaying?.videoId.startsWith('smb:') ?? false;
   const nativeActive = nativeSnapshot?.active === true;
   const tapActive = nativeSnapshot?.tapActive === true;
   const stream = nowPlaying?.stream ?? null;
@@ -91,9 +94,15 @@ export function buildAudioPipelineData(input: PipelineInput): AudioPipelineSumma
     ? 'Idle (No track loaded)'
     : isLocal
       ? 'Local File'
-      : nowPlaying.streamInfo === 'Offline download'
-        ? 'Offline Download'
-        : 'YouTube Music';
+      : isWebDav
+        ? 'WebDAV Server'
+        : isSmb
+          ? 'SMB Share'
+          : nowPlaying.streamInfo === 'Offline download'
+            ? 'Offline Download'
+            : stream?.client && !/^(VISIONOS|WEB_REMIX|IOS|ANDROID|TVHTML5|WASAPI)/i.test(stream.client)
+              ? stream.client
+              : 'YouTube Music';
 
   const codec = nativeActive
     ? nativeSnapshot.codec ?? 'PCM'

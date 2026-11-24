@@ -12,6 +12,7 @@ import {
   Waves,
 } from 'lucide-react';
 import { useState } from 'react';
+import { PillRangeSlider } from '@/components/PillRangeSlider';
 import { PrefetchLink } from '@/components/PrefetchLink';
 import { Select } from '@/components/Select';
 import { SubpageHeader } from '@/components/SubpageHeader';
@@ -52,46 +53,6 @@ const SLEEP_OPTIONS: { value: string; label: string }[] = [
   { value: '60', label: '60 minutes' },
   { value: 'track', label: 'End of current track' },
 ];
-
-function PillCrossfadeSlider({
-  value,
-  onChange,
-  disabled = false,
-}: {
-  value: number;
-  onChange: (seconds: number) => void;
-  disabled?: boolean;
-}) {
-  const pct = (Math.max(0, Math.min(12, value)) / 12) * 100;
-  return (
-    <div className="relative flex h-9 items-center">
-      <div className="relative h-4 w-full overflow-hidden rounded-pill bg-quaternary">
-        <div
-          className="h-full rounded-l-pill bg-primary"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute top-1/2 h-8 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-pill bg-primary shadow-[0_1px_6px_rgba(0,0,0,0.45)]"
-        style={{ left: `calc(${pct}% + ${pct < 8 ? 6 : pct > 92 ? -6 : 0}px)` }}
-      />
-      <input
-        type="range"
-        min={0}
-        max={12}
-        step={1}
-        value={value}
-        disabled={disabled}
-        aria-label="Crossfade duration in seconds"
-        onChange={(e) => {
-          if (!disabled) onChange(Number(e.currentTarget.value));
-        }}
-        className={`absolute inset-0 h-full w-full opacity-0 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
-      />
-    </div>
-  );
-}
 
 export default function PlaybackSettingsPage() {
   const desktop = isTauriDesktop();
@@ -363,9 +324,11 @@ export default function PlaybackSettingsPage() {
               </span>
             </div>
             <div className="pl-10">
-              <PillCrossfadeSlider
+              <PillRangeSlider
                 value={dspLocked || automix ? 0 : crossfadeSec}
+                max={12}
                 disabled={dspLocked}
+                ariaLabel="Crossfade duration in seconds"
                 onChange={(sec) => {
                   if (!dspLocked) setCrossfade(sec);
                 }}

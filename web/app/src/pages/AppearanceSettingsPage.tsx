@@ -52,7 +52,7 @@ export default function AppearanceSettingsPage() {
             <section className={settingsUi.group}>
               <Toggle
                 label="Minimize to System Tray on Close"
-                detail="Keep music playing in the background when you close the main window."
+                detail="Keep music playing in the background instead of exiting when closing the window."
                 checked={minimizeToTray}
                 onChange={setMinimizeToTray}
               />

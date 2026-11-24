@@ -5,10 +5,17 @@ import { isBitPerfectBypassActive, isExclusiveOutputMode } from '@/desktop/bitPe
 import {
   desktopApi,
   isTauriDesktop,
+  type AudioDeviceInfo,
   type AudioSettings,
   type BitPerfectStatus,
   type NativePlaybackSnapshot,
+  type RemoteTrackItem,
 } from '@/desktop/tauriBridge';
+import {
+  extensionForResolvedStream,
+  resolveReplacementSource,
+} from '@/playback/sourceResolver';
+import { DESKTOP_AUDIO_DEVICES_KEY } from '@/desktop/useDesktopAudioDevices';
 import { extensionQueryKey } from '@/extension/useExtension';
 import { artworkAtPixels } from '@/lib/artwork';
 import { queryClient } from '@/lib/queryClient';
@@ -116,6 +123,7 @@ interface PlayerState extends Settings {
   nativeActive: boolean;
   nativePlayhead: NativePlayheadState | null;
   registerLocalTracks: (tracks: { id: string; filePath: string; codec?: string }[]) => void;
+  registerRemoteTracks: (tracks: RemoteTrackItem[]) => void;
 
   /** Plays [tracks] as the context (an album, a playlist), from [startIndex]. */
   playTracks: (tracks: Track[], startIndex: number, source: QueueSource) => void;
@@ -264,13 +272,35 @@ export function getAudio(): HTMLAudioElement | null {
   return decks?.[active]?.audio ?? null;
 }
 
-/**
- * Where the song in front is, in seconds, and whether it's moving. Its
- * element, except while a loop mix plays it from a deck: then the mix's own
- * beat clock, which loops and follows the tempo ramp (the element is paused
- * underneath). The lyrics and the seek bars read this.
- */
+export interface CastHooks {
+  isConnected(): boolean;
+  getPlayhead(): { sec: number; paused: boolean } | null;
+  loadTrack(opts: {
+    trackId: string;
+    title: string;
+    artist: string;
+    album: string | null;
+    artworkUrl: string | null;
+    durationSec: number;
+    startSec: number;
+    autoplay: boolean;
+  }): Promise<void>;
+  play(): void;
+  pause(): void;
+  seek(seconds: number): void;
+  setVolume(volume: number): void;
+}
+
+let castHooks: CastHooks | null = null;
+export function setCastHooks(hooks: CastHooks | null): void {
+  castHooks = hooks;
+}
+
+/** Where the song in front is, in seconds, and whether it's moving. */
 export function getPlayhead(): { sec: number; paused: boolean } | null {
+  if (castHooks?.isConnected()) {
+    return castHooks.getPlayhead();
+  }
   const { mixing, nowPlaying, nativeActive, nativePlayhead } = usePlayer.getState();
   if (nativeActive && nativePlayhead) {
     const elapsed = nativePlayhead.paused
@@ -295,7 +325,29 @@ export function getAudioContextSampleRate(): number | null {
 }
 
 const localTrackMeta = new Map<string, { filePath: string; codec?: string }>();
+const remoteTrackMeta = new Map<
+  string,
+  { proxyUrl: string; proxyKey: string; codec: string; fileName: string; sourceKind: 'webdav' | 'smb' }
+>();
 let localHandoffInFlight = false;
+
+function extensionFromName(name: string | null | undefined): string | null {
+  if (!name) return null;
+  const clean = name.split(/[?#]/)[0] ?? name;
+  const dot = clean.lastIndexOf('.');
+  if (dot < 0) return null;
+  const ext = clean.slice(dot + 1).trim().toLowerCase();
+  return ext || null;
+}
+
+function getActiveOutputDevice(settings: AudioSettings | null): AudioDeviceInfo | null {
+  const devices = queryClient.getQueryData<AudioDeviceInfo[]>(DESKTOP_AUDIO_DEVICES_KEY) ?? [];
+  if (!devices.length) return null;
+  if (settings?.deviceId) {
+    return devices.find((d) => d.id === settings.deviceId) ?? null;
+  }
+  return devices.find((d) => d.isDefault) ?? devices[0] ?? null;
+}
 
 function getCachedAudioSettings(): AudioSettings | null {
   return queryClient.getQueryData<NativePlaybackSnapshot>(['desktop', 'audio', 'snapshot'])?.settings ?? null;
@@ -355,14 +407,17 @@ export async function syncDesktopOutputRoute(explicitSettings?: AudioSettings): 
 
   const state = usePlayer.getState();
   const entry = state.queue[state.index];
-  const isLocalTrack =
-    entry?.track.videoId.startsWith('local:') &&
+  const isDirectRoutedTrack =
+    !!entry &&
+    (entry.track.videoId.startsWith('local:') ||
+      entry.track.videoId.startsWith('webdav:') ||
+      entry.track.videoId.startsWith('smb:')) &&
     state.nowPlaying?.videoId === entry.track.videoId;
   const isLoaded =
     state.status === 'playing' || state.status === 'paused' || state.status === 'buffering';
   const exclusive = isExclusiveOutputMode(settings?.outputMode);
   if (
-    isLocalTrack &&
+    isDirectRoutedTrack &&
     isLoaded &&
     !localHandoffInFlight &&
     ((exclusive && !state.nativeActive) || (!exclusive && state.nativeActive))
@@ -738,6 +793,18 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
     }
   },
 
+  registerRemoteTracks(tracks) {
+    for (const t of tracks) {
+      remoteTrackMeta.set(t.id, {
+        proxyUrl: t.streamProxyUrl,
+        proxyKey: t.proxyKey,
+        codec: t.codec,
+        fileName: t.fileName,
+        sourceKind: t.sourceKind,
+      });
+    }
+  },
+
   playTracks(tracks, startIndex, source) {
     if (!tracks.length) return;
     const { queue, index, shuffle } = get();
@@ -840,6 +907,19 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
     const { nowPlaying, status, index, nativeActive, nativePlayhead } = get();
     if (!nowPlaying) return;
 
+    if (castHooks?.isConnected()) {
+      const pausing = status === 'playing' || status === 'buffering';
+      if (pausing) {
+        castHooks.pause();
+        set({ status: 'paused' });
+      } else {
+        castHooks.play();
+        set({ status: 'playing' });
+      }
+      intent();
+      return;
+    }
+
     if (nativeActive) {
       const head = getPlayhead();
       const currentSec = head?.sec ?? nativePlayhead?.positionSec ?? 0;
@@ -898,6 +978,13 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
 
   seek(seconds) {
     const { nativeActive, nativePlayhead, nowPlaying, status } = get();
+    if (castHooks?.isConnected()) {
+      const dur = nowPlaying?.durationSec ?? seconds;
+      const clamped = Math.max(0, Math.min(seconds, dur || seconds));
+      castHooks.seek(clamped);
+      intent();
+      return;
+    }
     if (nativeActive) {
       const dur = nativePlayhead?.durationSec ?? nowPlaying?.durationSec ?? seconds;
       const clamped = Math.max(0, Math.min(seconds, dur || seconds));
@@ -964,22 +1051,32 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
   },
 
   setVolume(volume) {
-    if (get().bitPerfectStatus?.active) return;
+    const casting = castHooks?.isConnected() ?? false;
+    if (!casting && get().bitPerfectStatus?.active) return;
     const nextVol = Math.min(1, Math.max(0, volume));
     set({ volume: nextVol, muted: false });
     applyVolumes();
     saveSettings(get());
+    if (casting) {
+      castHooks?.setVolume(nextVol);
+      return;
+    }
     if (isTauriDesktop()) {
       void desktopApi.audioSetVolume(nextVol, false).catch(() => {});
     }
   },
 
   toggleMute() {
-    if (get().bitPerfectStatus?.active) return;
+    const casting = castHooks?.isConnected() ?? false;
+    if (!casting && get().bitPerfectStatus?.active) return;
     const nextMuted = !get().muted;
     set({ muted: nextMuted });
     applyVolumes();
     saveSettings(get());
+    if (casting) {
+      castHooks?.setVolume(nextMuted ? 0 : get().volume);
+      return;
+    }
     if (isTauriDesktop()) {
       void desktopApi.audioSetVolume(get().volume, nextMuted).catch(() => {});
     }
@@ -1140,6 +1237,144 @@ function insertUser(tracks: Track[], source: QueueSource | null, isNext: boolean
 
 // ---- Loading and moving through the queue -------------------------------------------
 
+/** Stops any local audio deck or WASAPI stream before transferring playback to a TV. */
+export async function silenceLocalOutputForCast(): Promise<void> {
+  cancelCrossfade();
+  graph?.dj.stop();
+  if (decks) {
+    for (const d of decks) {
+      void d.engine.stop().catch(() => {});
+      d.audio.pause();
+    }
+  }
+  if (graph?.tap?.isEnabled) {
+    await graph.tap.setRouting(false).catch(() => {});
+  }
+  if (usePlayer.getState().nativeActive) {
+    await desktopApi.audioStop().catch(() => {});
+    usePlayer.setState({
+      nativeActive: false,
+      nativePlayhead: null,
+      bitPerfectStatus: null,
+    });
+  }
+}
+
+export async function resumeLocalAfterCast(startSec: number, autoplay: boolean): Promise<void> {
+  const { index } = usePlayer.getState();
+  if (index >= 0) {
+    await startAt(index, { startSec, autoplay });
+  }
+}
+
+export function handleCastTrackEnded(trackId: string): void {
+  const state = usePlayer.getState();
+  if (state.nowPlaying?.videoId !== trackId) return;
+  endedListeners.forEach((listener) => listener());
+  void advance(true).then(intent);
+}
+
+async function beginNativeTrackPlayback(params: {
+  entry: QueueEntry;
+  token: number;
+  startSec: number;
+  autoplay: boolean;
+  playNative: () => Promise<NativePlaybackSnapshot>;
+  codecHint?: string | null;
+  bitrateKbps?: number | null;
+  sourceLabel?: string | null;
+}): Promise<void> {
+  const { entry, token, startSec, autoplay, playNative, codecHint, bitrateKbps, sourceLabel } = params;
+  if (decks) {
+    for (const d of decks) {
+      void d.engine.stop().catch(() => {});
+      d.audio.pause();
+    }
+  }
+  if (graph?.tap?.isEnabled) {
+    await graph.tap.setRouting(false);
+  }
+  const curState = usePlayer.getState();
+  await desktopApi.audioSetVolume(curState.volume, curState.muted).catch(() => {});
+  const played = await playNative();
+  if (token !== loadToken) return;
+  if (startSec > 0) await desktopApi.audioSeek(startSec).catch(() => {});
+  if (!autoplay) await desktopApi.audioPause().catch(() => {});
+  queryClient.setQueryData(['desktop', 'audio', 'snapshot'], played);
+  const dur = played.durationSec || entry.track.durationSec || 0;
+  const effectiveRate = isBitPerfectBypassActive(played.settings, played.bitPerfect) ? 1 : played.playbackRate;
+  const driverLabel = played.bitPerfect.exact
+    ? 'WASAPI Bit-Exact'
+    : (played.bitPerfect.driver ?? 'WASAPI Exclusive');
+  const resolvedCodec = codecHint ?? played.codec ?? 'PCM';
+  usePlayer.setState({
+    nativeActive: true,
+    nativePlayhead: {
+      positionSec: startSec,
+      durationSec: dur,
+      playbackRate: effectiveRate,
+      updatedAtMs: performance.now(),
+      paused: !autoplay,
+    },
+    desktopOutputMode: played.settings.outputMode,
+    bitPerfectStatus: played.bitPerfect,
+    nowPlaying: {
+      ...hintOf(entry.track),
+      durationSec: dur,
+      streamInfo: sourceLabel
+        ? `${resolvedCodec} · ${driverLabel} via ${sourceLabel}`
+        : `${resolvedCodec} · ${driverLabel}`,
+      stream: {
+        codec: resolvedCodec,
+        itag: null,
+        bitrateKbps: bitrateKbps ?? null,
+        sampleRateHz: played.sampleRateHz,
+        channels: played.channels,
+        mode: 'direct',
+        client: sourceLabel ? `${sourceLabel} (${driverLabel})` : driverLabel,
+      },
+    },
+    status: autoplay ? 'playing' : 'paused',
+    error: null,
+  });
+  applyVolumes();
+  updateMediaSession(usePlayer.getState().nowPlaying);
+  afterTrackStarted();
+}
+
+async function beginAudioElementPlayback(params: {
+  deck: Deck;
+  entry: QueueEntry;
+  url: string;
+  token: number;
+  startSec: number;
+  autoplay: boolean;
+  settings: AudioSettings | null;
+  streamInfo: string;
+  streamStats: (StreamStats & { client: string }) | null;
+}): Promise<void> {
+  const { deck, entry, url, token, startSec, autoplay, settings, streamInfo, streamStats } = params;
+  await deck.engine.stop().catch(() => {});
+  deck.audio.src = url;
+  applyEffectivePlaybackRate(settings);
+  if (startSec > 0) deck.audio.currentTime = startSec;
+  if (autoplay) await deck.audio.play();
+  if (token !== loadToken) return;
+  const dur = Number.isFinite(deck.audio.duration) ? deck.audio.duration : (entry.track.durationSec ?? 0);
+  usePlayer.setState({
+    nowPlaying: {
+      ...hintOf(entry.track),
+      durationSec: dur,
+      streamInfo,
+      stream: streamStats,
+    },
+    status: autoplay ? 'playing' : 'paused',
+  });
+  updateMediaSession(usePlayer.getState().nowPlaying);
+  afterTrackStarted();
+  syncAutomix(settings);
+}
+
 /** Loads queue[at] into the deck in front and plays it. `auto` marks a move the player made on its own. */
 async function startAt(at: number, { startSec = 0, auto = false, autoplay = true } = {}): Promise<void> {
   const state = usePlayer.getState();
@@ -1147,14 +1382,37 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
   if (!entry) return;
   cancelCrossfade();
   const token = ++loadToken;
+  const trackId = entry.track.videoId;
+  const isRemoteFile = trackId.startsWith('webdav:') || trackId.startsWith('smb:');
+  const isDirectLibrary = trackId.startsWith('local:') || isRemoteFile;
 
-  if (!extensionReady()) {
-    usePlayer.setState({
-      index: at,
-      nowPlaying: { ...hintOf(entry.track), title: entry.track.title || 'Can’t play this here yet' },
-      status: 'error',
-      error: 'YouTube playback needs the BitChord extension.',
-    });
+  if (castHooks?.isConnected()) {
+    usePlayer.setState({ index: at, nowPlaying: hintOf(entry.track), status: 'loading', error: null });
+    updateMediaSession(usePlayer.getState().nowPlaying);
+    try {
+      await silenceLocalOutputForCast();
+      if (token !== loadToken) return;
+      await castHooks.loadTrack({
+        trackId,
+        title: entry.track.title,
+        artist: artistNames(entry.track),
+        album: entry.track.album?.name ?? null,
+        artworkUrl: entry.track.thumbnail,
+        durationSec: entry.track.durationSec ?? 0,
+        startSec,
+        autoplay,
+      });
+      if (token !== loadToken) return;
+      usePlayer.setState({
+        status: autoplay ? 'playing' : 'paused',
+        error: null,
+      });
+      afterTrackStarted();
+    } catch (error) {
+      if (token !== loadToken) return;
+      const message = error instanceof Error ? error.message : String(error);
+      usePlayer.setState({ status: 'error', error: message });
+    }
     return;
   }
 
@@ -1162,68 +1420,93 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
   updateMediaSession(usePlayer.getState().nowPlaying);
   try {
     const settings = await resolveDesktopAudioSettings();
+    const exclusive = isExclusiveOutputMode(settings?.outputMode);
 
-    if (isTauriDesktop() && entry.track.videoId.startsWith('local:') && isExclusiveOutputMode(settings?.outputMode)) {
-      let localMeta = localTrackMeta.get(entry.track.videoId);
+    if (isTauriDesktop() && trackId.startsWith('local:') && exclusive) {
+      let localMeta = localTrackMeta.get(trackId);
       if (!localMeta) {
         const scanned = await desktopApi.localListTracks().catch(() => []);
         usePlayer.getState().registerLocalTracks(scanned);
-        localMeta = localTrackMeta.get(entry.track.videoId);
+        localMeta = localTrackMeta.get(trackId);
       }
       if (localMeta) {
-        if (decks) {
-          for (const d of decks) {
-            void d.engine.stop().catch(() => {});
-            d.audio.pause();
-          }
-        }
-        if (graph?.tap?.isEnabled) {
-          await graph.tap.setRouting(false);
-        }
-        const curState = usePlayer.getState();
-        await desktopApi.audioSetVolume(curState.volume, curState.muted).catch(() => {});
-        const played = await desktopApi.audioPlayFile(entry.track.videoId, localMeta.filePath);
-        if (token !== loadToken) return;
-        if (startSec > 0) await desktopApi.audioSeek(startSec).catch(() => {});
-        if (!autoplay) await desktopApi.audioPause().catch(() => {});
-        queryClient.setQueryData(['desktop', 'audio', 'snapshot'], played);
-        const dur = played.durationSec || entry.track.durationSec || 0;
-        const effectiveRate = isBitPerfectBypassActive(played.settings, played.bitPerfect)
-          ? 1
-          : played.playbackRate;
-        usePlayer.setState({
-          nativeActive: true,
-          nativePlayhead: {
-            positionSec: startSec,
-            durationSec: dur,
-            playbackRate: effectiveRate,
-            updatedAtMs: performance.now(),
-            paused: !autoplay,
-          },
-          desktopOutputMode: played.settings.outputMode,
-          bitPerfectStatus: played.bitPerfect,
-          nowPlaying: {
-            ...hintOf(entry.track),
-            durationSec: dur,
-            streamInfo: `${localMeta.codec ?? played.codec ?? 'PCM'} · ${played.bitPerfect.driver ?? 'WASAPI Exclusive'}`,
-            stream: {
-              codec: localMeta.codec ?? played.codec ?? 'PCM',
-              itag: null,
-              bitrateKbps: null,
-              sampleRateHz: played.sampleRateHz,
-              channels: played.channels,
-              mode: 'direct',
-              client: played.bitPerfect.exact ? 'WASAPI Bit-Exact' : (played.bitPerfect.driver ?? 'WASAPI Exclusive'),
-            },
-          },
-          status: autoplay ? 'playing' : 'paused',
-          error: null,
+        await beginNativeTrackPlayback({
+          entry,
+          token,
+          startSec,
+          autoplay,
+          codecHint: localMeta.codec,
+          playNative: () => desktopApi.audioPlayFile(trackId, localMeta.filePath),
         });
-        applyVolumes();
-        updateMediaSession(usePlayer.getState().nowPlaying);
-        afterTrackStarted();
         return;
       }
+    }
+
+    if (isTauriDesktop() && isRemoteFile) {
+      let rMeta = remoteTrackMeta.get(trackId);
+      if (!rMeta) {
+        const list = trackId.startsWith('webdav:')
+          ? await desktopApi.webdavListTracks().catch(() => [])
+          : await desktopApi.smbListTracks().catch(() => []);
+        usePlayer.getState().registerRemoteTracks(list);
+        rMeta = remoteTrackMeta.get(trackId);
+      }
+      if (!rMeta) {
+        throw new Error(
+          trackId.startsWith('webdav:')
+            ? 'This WebDAV file is unavailable. Check WebDAV under Settings -> Sources.'
+            : 'This SMB file is unavailable. Check SMB under Settings -> Sources.',
+        );
+      }
+      const sourceLabel = rMeta.sourceKind === 'webdav' ? 'WebDAV' : 'SMB';
+      if (exclusive) {
+        await beginNativeTrackPlayback({
+          entry,
+          token,
+          startSec,
+          autoplay,
+          codecHint: rMeta.codec,
+          sourceLabel,
+          playNative: () =>
+            desktopApi.audioPlayRemoteSource(trackId, rMeta.proxyKey, extensionFromName(rMeta.fileName)),
+        });
+        return;
+      }
+      if (usePlayer.getState().nativeActive) {
+        await desktopApi.audioStop().catch(() => {});
+        usePlayer.setState({ nativeActive: false, nativePlayhead: null, bitPerfectStatus: null });
+      }
+      const all = await getDecks();
+      const deck = all[active]!;
+      all[1 - active]!.engine.stop().catch(() => {});
+      deck.gain = 1;
+      applyVolumes();
+      applyEffectivePlaybackRate(settings);
+      graph?.tap?.flush();
+      if (desktopTapWanted(settings)) {
+        await syncDesktopOutputRoute(settings ?? undefined);
+        if (token !== loadToken) return;
+      }
+      await beginAudioElementPlayback({
+        deck,
+        entry,
+        url: rMeta.proxyUrl,
+        token,
+        startSec,
+        autoplay,
+        settings,
+        streamInfo: `${rMeta.codec} · ${sourceLabel}`,
+        streamStats: {
+          codec: rMeta.codec,
+          itag: null,
+          bitrateKbps: null,
+          sampleRateHz: null,
+          channels: 2,
+          mode: 'direct',
+          client: sourceLabel,
+        },
+      });
+      return;
     }
 
     if (usePlayer.getState().nativeActive) {
@@ -1250,37 +1533,117 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
 
     let localMediaUrl: string | null = null;
     if (isTauriDesktop()) {
-      if (entry.track.videoId.startsWith('local:')) {
-        localMediaUrl = await desktopApi.localMediaUrl(entry.track.videoId).catch(() => null);
+      if (trackId.startsWith('local:')) {
+        localMediaUrl = await desktopApi.localMediaUrl(trackId).catch(() => null);
       } else {
-        localMediaUrl = await desktopApi.downloadsMediaUrl(entry.track.videoId).catch(() => null);
+        localMediaUrl = await desktopApi.downloadsMediaUrl(trackId).catch(() => null);
       }
     }
 
     if (localMediaUrl) {
-      await deck.engine.stop().catch(() => {});
-      deck.audio.src = localMediaUrl;
-      applyEffectivePlaybackRate(settings);
-      if (startSec > 0) deck.audio.currentTime = startSec;
-      if (autoplay) await deck.audio.play();
-      if (token !== loadToken) return;
-      const dur = Number.isFinite(deck.audio.duration) ? deck.audio.duration : (entry.track.durationSec ?? 0);
-      usePlayer.setState({
-        nowPlaying: {
-          ...hintOf(entry.track),
-          durationSec: dur,
-          streamInfo: entry.track.videoId.startsWith('local:') ? 'Local file' : 'Offline download',
-          stream: null,
-        },
-        status: autoplay ? 'playing' : 'paused',
+      await beginAudioElementPlayback({
+        deck,
+        entry,
+        url: localMediaUrl,
+        token,
+        startSec,
+        autoplay,
+        settings,
+        streamInfo: trackId.startsWith('local:') ? 'Local file' : 'Offline download',
+        streamStats: null,
       });
-      updateMediaSession(usePlayer.getState().nowPlaying);
-      afterTrackStarted();
-      syncAutomix(settings);
       return;
     }
 
-    const track = await deck.engine.load(entry.track.videoId, { startSec, autoplay });
+    // Attempt higher-priority configured sources (HTTP Addons -> JioSaavn) when Direct Source Stream is enabled.
+    const { directSourceStream, streamingQuality } = usePlayer.getState();
+    if (isTauriDesktop() && directSourceStream && !isDirectLibrary) {
+      const replacement = await resolveReplacementSource(entry.track, {
+        streamingQuality,
+        outputMode: settings?.outputMode ?? 'shared',
+        activeDevice: getActiveOutputDevice(settings ?? null),
+      }).catch(() => null);
+      if (token !== loadToken) return;
+
+      if (replacement) {
+        const { payload } = replacement;
+        const streamMeta = payload.stream;
+        const codecLabel =
+          streamMeta.codec ??
+          streamMeta.format?.toUpperCase() ??
+          (streamMeta.lossless ? 'FLAC' : 'Audio');
+
+        if (exclusive) {
+          try {
+            await beginNativeTrackPlayback({
+              entry,
+              token,
+              startSec,
+              autoplay,
+              codecHint: codecLabel,
+              bitrateKbps: streamMeta.bitrateKbps,
+              sourceLabel: streamMeta.sourceName,
+              playNative: () =>
+                desktopApi.audioPlayRemoteSource(
+                  trackId,
+                  payload.proxyKey,
+                  extensionForResolvedStream(payload),
+                ),
+            });
+            return;
+          } catch (err) {
+            trackLog.w(
+              `Native decode failed for ${streamMeta.sourceName}, falling back: ${err instanceof Error ? err.message : String(err)}`,
+              trackId,
+            );
+          }
+        }
+
+        try {
+          const detailParts = [codecLabel];
+          if (streamMeta.bitrateKbps) detailParts.push(`${streamMeta.bitrateKbps} kbps`);
+          else if (streamMeta.sampleRateHz) detailParts.push(`${+(streamMeta.sampleRateHz / 1000).toFixed(1)} kHz`);
+          detailParts.push(`via ${streamMeta.sourceName}`);
+          await beginAudioElementPlayback({
+            deck,
+            entry,
+            url: payload.proxyUrl,
+            token,
+            startSec,
+            autoplay,
+            settings,
+            streamInfo: detailParts.join(' · '),
+            streamStats: {
+              codec: codecLabel,
+              itag: null,
+              bitrateKbps: streamMeta.bitrateKbps,
+              sampleRateHz: streamMeta.sampleRateHz,
+              channels: 2,
+              mode: 'direct',
+              client: streamMeta.sourceName,
+            },
+          });
+          return;
+        } catch (err) {
+          trackLog.w(
+            `Source playback failed for ${streamMeta.sourceName}, falling back to YouTube Music: ${err instanceof Error ? err.message : String(err)}`,
+            trackId,
+          );
+        }
+      }
+    }
+
+    if (!extensionReady()) {
+      usePlayer.setState({
+        index: at,
+        nowPlaying: { ...hintOf(entry.track), title: entry.track.title || 'Can’t play this here yet' },
+        status: 'error',
+        error: 'YouTube playback needs the BitChord extension.',
+      });
+      return;
+    }
+
+    const track = await deck.engine.load(trackId, { startSec, autoplay });
     if (token !== loadToken) return;
     applyEffectivePlaybackRate(settings);
     applyTrack(track, entry.track);
@@ -1293,7 +1656,7 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
     usePlayer.setState({ status: 'error', error: message });
     // A track the player reached on its own that can't play is skipped, as on the phone.
     if (auto && planNext(true)) {
-      trackLog.w(`skipping: ${message}`, entry.track.videoId);
+      trackLog.w(`skipping: ${message}`, trackId);
       setTimeout(() => {
         if (token === loadToken) void advance(true);
       }, 1500);

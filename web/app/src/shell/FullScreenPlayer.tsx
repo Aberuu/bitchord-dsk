@@ -24,6 +24,7 @@ import { VideoSurface } from '@/components/music/VideoSurface';
 import { useTrackMotion } from '@/data/apple/motionArt';
 import { useAudioPipeline } from '@/desktop/useAudioPipeline';
 import { useBitPerfectUi } from '@/desktop/useBitPerfectUi';
+import { useCastSession, useCastSupport } from '@/desktop/useCastSupport';
 import { sizedArtwork } from '@/lib/artwork';
 import { usePlayer } from '@/state/player';
 import { useUi } from '@/state/ui';
@@ -198,7 +199,10 @@ export function FullScreenPlayer({
   const fullScreenSearchOpen = useUi((s) => s.fullScreenSearchOpen);
   const setFullScreenSearchOpen = useUi((s) => s.setFullScreenSearchOpen);
   const setAudioOutputOpen = useUi((s) => s.setAudioOutputOpen);
+  const setCastModalOpen = useUi((s) => s.setCastModalOpen);
   const pipeline = useAudioPipeline();
+  const castSupport = useCastSupport();
+  const castSession = useCastSession();
   const video = useHasVideo(nowPlaying?.videoId);
 
   const [panel, setPanel] = useState<'lyrics' | 'queue' | null>(() =>
@@ -564,9 +568,13 @@ export function FullScreenPlayer({
         )}
       </div>
 
-      {/* Bottom 3-icon toolbar + active device label matching Screenshots 5 & 6 */}
+      {/* Bottom toolbar: Lyrics, hardware-gated Cast to TV (Image 1), Up Next + active audio output pill */}
       <footer className={`relative z-1 flex flex-none flex-col items-center gap-1 pt-1 pb-4 transition-opacity duration-300${hidden}`}>
-        <div className="flex w-[min(320px,82vw)] items-center justify-between px-4">
+        <div
+          className={`flex w-[min(320px,82vw)] items-center px-4 ${
+            castSupport.supported ? 'justify-between' : 'justify-around'
+          }`}
+        >
           <button
             type="button"
             className={`grid size-10 place-items-center rounded-[11px] transition-colors ${
@@ -579,15 +587,30 @@ export function FullScreenPlayer({
             {showLyrics ? <LyricsActiveIcon size={19} /> : <LyricsIcon size={19} />}
           </button>
 
-          <button
-            type="button"
-            className="grid size-10 place-items-center rounded-[11px] text-white/70 transition-colors hover:bg-white/12 hover:text-white"
-            aria-label="Audio output"
-            title="Audio output & Signal Path"
-            onClick={() => setAudioOutputOpen(true)}
-          >
-            <Cast size={19} strokeWidth={2} aria-hidden="true" />
-          </button>
+          {castSupport.supported && (
+            <button
+              type="button"
+              className={`grid size-10 place-items-center rounded-[11px] transition-colors ${
+                castSession.connected
+                  ? 'bg-white/22 text-white'
+                  : 'text-white/70 hover:bg-white/12 hover:text-white'
+              }`}
+              aria-label={
+                castSession.connected && castSession.device
+                  ? `Cast to TV (${castSession.device.name})`
+                  : 'Cast to TV'
+              }
+              aria-pressed={castSession.connected}
+              title={
+                castSession.connected && castSession.device
+                  ? `Casting to ${castSession.device.name}`
+                  : 'Cast to TV'
+              }
+              onClick={() => setCastModalOpen(true)}
+            >
+              <Cast size={19} strokeWidth={2} aria-hidden="true" />
+            </button>
+          )}
 
           <button
             type="button"
@@ -605,9 +628,13 @@ export function FullScreenPlayer({
         <button
           type="button"
           onClick={() => setAudioOutputOpen(true)}
+          aria-label="Audio output"
+          title="Audio output & Signal Path"
           className="rounded-pill px-3 py-0.5 type-caption-1 text-white/60 transition-colors hover:bg-white/10 hover:text-white"
         >
-          {pipeline.activeDeviceName}
+          {castSession.connected && castSession.device
+            ? `Casting to ${castSession.device.name}`
+            : pipeline.activeDeviceName}
         </button>
       </footer>
     </div>

@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Suggestions } from '@/data/music/types';
+import { DEFAULT_CAST_SESSION, useCast } from '@/desktop/castStore';
 import { usePlayer } from '@/state/player';
 import { useUi } from '@/state/ui';
 import { FullScreenPlayer } from './FullScreenPlayer';
@@ -96,7 +97,18 @@ describe('FullScreenPlayer exit animation and Ctrl+K search', () => {
     playTrackSpy.mockReset();
     mockVideoId = null;
 
-    useUi.setState({ fullScreen: true, fullScreenSearchOpen: false });
+    useUi.setState({
+      fullScreen: true,
+      fullScreenSearchOpen: false,
+      castModalOpen: false,
+      audioOutputOpen: false,
+    });
+    useCast.setState({
+      support: { supported: false, reason: null, localIp: null, adapterName: null, protocols: [] },
+      session: DEFAULT_CAST_SESSION,
+      devices: [],
+      error: null,
+    });
     usePlayer.setState({
       nowPlaying: {
         videoId: 'v-now',
@@ -116,7 +128,18 @@ describe('FullScreenPlayer exit animation and Ctrl+K search', () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
-    useUi.setState({ fullScreen: false, fullScreenSearchOpen: false });
+    useUi.setState({
+      fullScreen: false,
+      fullScreenSearchOpen: false,
+      castModalOpen: false,
+      audioOutputOpen: false,
+    });
+    useCast.setState({
+      support: { supported: false, reason: null, localIp: null, adapterName: null, protocols: [] },
+      session: DEFAULT_CAST_SESSION,
+      devices: [],
+      error: null,
+    });
     usePlayer.setState({ nowPlaying: null, queue: [], index: -1 });
     vi.useRealTimers();
   });
@@ -226,5 +249,40 @@ describe('FullScreenPlayer exit animation and Ctrl+K search', () => {
 
     const footer = dialog.querySelector('footer');
     expect(footer).toBeTruthy();
+  });
+
+  it('hides the Cast to TV icon when unsupported and wires it solely to CastModal when supported', () => {
+    renderFs(false);
+    expect(host.querySelector('button[aria-label^="Cast to TV"]')).toBeNull();
+    const pillWhenUnsupported = host.querySelector<HTMLButtonElement>('footer button[aria-label="Audio output"]')!;
+    expect(pillWhenUnsupported).toBeTruthy();
+    expect(pillWhenUnsupported.textContent).toBe('Speakers');
+
+    act(() => {
+      useCast.setState({
+        support: {
+          supported: true,
+          reason: null,
+          localIp: '192.168.1.10',
+          adapterName: 'Wi-Fi',
+          protocols: ['chromecast', 'dlna'],
+        },
+      });
+    });
+
+    const castBtn = host.querySelector<HTMLButtonElement>('footer button[aria-label="Cast to TV"]')!;
+    expect(castBtn).toBeTruthy();
+    act(() => {
+      castBtn.click();
+    });
+    expect(useUi.getState().castModalOpen).toBe(true);
+    expect(useUi.getState().audioOutputOpen).toBe(false);
+
+    act(() => {
+      useUi.setState({ castModalOpen: false });
+      pillWhenUnsupported.click();
+    });
+    expect(useUi.getState().audioOutputOpen).toBe(true);
+    expect(useUi.getState().castModalOpen).toBe(false);
   });
 });

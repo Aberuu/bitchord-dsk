@@ -6,6 +6,7 @@ import {
   CirclePlay,
   FileMusic,
   MessageSquareQuote,
+  MonitorDown,
   Paintbrush,
   Puzzle,
   Search,
@@ -21,7 +22,7 @@ import { useNavigate } from 'react-router';
 import { DeveloperWatermark } from '@/components/DeveloperWatermark';
 import { PageHeader } from '@/components/PageHeader';
 import { PrefetchLink } from '@/components/PrefetchLink';
-import { getBootstrapSnapshot } from '@/desktop/tauriBridge';
+import { getBootstrapSnapshot, isTauriDesktop } from '@/desktop/tauriBridge';
 import { useAudioPipeline } from '@/desktop/useAudioPipeline';
 import { useYtAuth } from '@/extension/useYtAuth';
 import { useParty } from '@/party/useParty';
@@ -106,7 +107,10 @@ export default function SettingsPage() {
   const yt = useYtAuth();
   const party = useParty();
   const pipeline = useAudioPipeline();
+  const desktop = isTauriDesktop();
   const setPipelineOpen = useUi((s) => s.setAudioPipelineOpen);
+  const minimizeToTray = useUi((s) => s.minimizeToTray);
+  const setMinimizeToTray = useUi((s) => s.setMinimizeToTray);
   const directSourceStream = usePlayer((s) => s.directSourceStream);
   const streamingQuality = usePlayer((s) => s.streamingQuality);
   const spatialAudio = usePlayer((s) => s.spatialAudio);
@@ -137,10 +141,17 @@ export default function SettingsPage() {
         to: '/settings/listen-together',
       },
       {
+        id: 'sources',
+        title: 'Sources',
+        subtitle: 'Addons, JioSaavn, YouTube Music, WebDAV, SMB, and track length tolerance',
+        keywords: 'sources addon jiosaavn youtube webdav smb share nas tolerance matching priority',
+        to: '/settings/sources',
+      },
+      {
         id: 'quality',
-        title: 'Audio Quality & Sources',
-        subtitle: 'Direct source stream, Lossless streaming, source priority',
-        keywords: 'audio quality lossless high normal bitrate direct stream sources',
+        title: 'Audio Quality',
+        subtitle: 'Direct source stream and streaming quality preferences',
+        keywords: 'audio quality lossless high normal bitrate direct stream',
         to: '/settings/quality',
       },
       {
@@ -168,7 +179,7 @@ export default function SettingsPage() {
         id: 'appearance',
         title: 'Appearance',
         subtitle: 'Light / Dark theme, Match Windows, tray behavior, Stats for Nerds, updates, About',
-        keywords: 'theme dark light appearance system tray nerd stats updates about credits developer github',
+        keywords: 'theme dark light appearance system tray minimize close exit nerd stats updates about credits developer github',
         to: '/settings/appearance',
       },
       {
@@ -230,6 +241,16 @@ export default function SettingsPage() {
             type="search"
             value={query}
             onChange={(e) => setQuery(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.stopPropagation();
+                if (query) {
+                  setQuery('');
+                } else {
+                  e.currentTarget.blur();
+                }
+              }
+            }}
             placeholder="Search settings"
             aria-label="Search settings"
             className="h-10 w-full rounded-[14px] border border-search-border/60 bg-quinary pr-9 pl-10 type-body-reduced text-primary placeholder:text-tertiary [&::-webkit-search-cancel-button]:hidden"
@@ -312,7 +333,7 @@ export default function SettingsPage() {
             <h2 className={settingsUi.sectionHeader}>Audio Quality</h2>
             <section className={settingsUi.group} aria-label="Audio quality">
               <HubRow
-                to="/settings/quality"
+                to="/settings/sources"
                 icon={<Puzzle size={20} strokeWidth={1.9} aria-hidden="true" />}
                 title="Sources"
                 subtitle="Where audio comes from and the order used"
@@ -353,6 +374,33 @@ export default function SettingsPage() {
                 />
               </label>
             </section>
+
+            {desktop && (
+              <>
+                <h2 className={settingsUi.sectionHeader}>Desktop Window</h2>
+                <section className={settingsUi.group} aria-label="Desktop window behavior">
+                  <label className={settingsUi.controlRow}>
+                    <span className="flex min-w-0 flex-1 items-start gap-3.5">
+                      <span className={`${settingsUi.iconPlain} mt-0.5`}>
+                        <MonitorDown size={20} strokeWidth={1.9} aria-hidden="true" />
+                      </span>
+                      <span className={settingsUi.rowText}>
+                        <span>Minimize to System Tray on Close</span>
+                        <span className={settingsUi.rowDetail}>
+                          Keep music playing in the background instead of exiting when closing the window.
+                        </span>
+                      </span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      className={settingsUi.switch}
+                      checked={minimizeToTray}
+                      onChange={(e) => setMinimizeToTray(e.currentTarget.checked)}
+                    />
+                  </label>
+                </section>
+              </>
+            )}
 
             {/* Grouped Category List matching Screenshot 1 & 2 */}
             <section className={`${settingsUi.group} mt-6`} aria-label="General settings">

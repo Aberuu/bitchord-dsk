@@ -26,7 +26,7 @@ export function SubpageHeader({ title, backTo = '/settings', backLabel = 'Back t
         type="button"
         onClick={handleBack}
         aria-label={backLabel}
-        title={backLabel}
+        title={`${backLabel} (Esc)`}
         className="grid size-10 place-items-center rounded-full bg-quinary text-primary transition-colors hover:bg-quaternary active:scale-95"
       >
         <ChevronLeft size={22} strokeWidth={2.2} aria-hidden="true" />

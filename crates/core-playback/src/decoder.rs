@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use std::fs::File;
+use std::io::Cursor;
 use std::path::Path;
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
@@ -22,9 +23,27 @@ pub struct DecodedAudio {
 pub fn decode_file_to_stereo_f32(path: &Path) -> Result<DecodedAudio> {
     let file = File::open(path).with_context(|| format!("open audio file {}", path.display()))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let ext = path.extension().and_then(|e| e.to_str());
+    decode_source_to_stereo_f32(mss, ext, &path.display().to_string())
+}
+
+pub fn decode_bytes_to_stereo_f32(
+    bytes: Vec<u8>,
+    ext: Option<&str>,
+    label: &str,
+) -> Result<DecodedAudio> {
+    let mss = MediaSourceStream::new(Box::new(Cursor::new(bytes)), Default::default());
+    decode_source_to_stereo_f32(mss, ext, label)
+}
+
+fn decode_source_to_stereo_f32(
+    mss: MediaSourceStream,
+    ext: Option<&str>,
+    label: &str,
+) -> Result<DecodedAudio> {
     let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        hint.with_extension(ext);
+    if let Some(ext) = ext.filter(|s| !s.trim().is_empty()) {
+        hint.with_extension(ext.trim().trim_start_matches('.'));
     }
 
     let probed = symphonia::default::get_probe()
@@ -41,7 +60,7 @@ pub fn decode_file_to_stereo_f32(path: &Path) -> Result<DecodedAudio> {
         .tracks()
         .iter()
         .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
-        .ok_or_else(|| anyhow!("No decodable audio track in {}", path.display()))?;
+        .ok_or_else(|| anyhow!("No decodable audio track in {label}"))?;
 
     let track_id = track.id;
     let params = track.codec_params.clone();
@@ -119,4 +138,42 @@ pub fn decode_file_to_stereo_f32(path: &Path) -> Result<DecodedAudio> {
         duration_sec,
         codec,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_in_memory_wav_bytes_to_stereo_f32() {
+        let mut wav = Vec::new();
+        let sample_rate: u32 = 44_100;
+        let channels: u16 = 2;
+        let bits: u16 = 16;
+        let num_frames: u32 = 64;
+        let data_bytes = num_frames * channels as u32 * (bits as u32 / 8);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_bytes).to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&channels.to_le_bytes());
+        wav.extend_from_slice(&sample_rate.to_le_bytes());
+        wav.extend_from_slice(&(sample_rate * channels as u32 * (bits as u32 / 8)).to_le_bytes());
+        wav.extend_from_slice(&(channels * (bits / 8)).to_le_bytes());
+        wav.extend_from_slice(&bits.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_bytes.to_le_bytes());
+        for i in 0..(num_frames * channels as u32) {
+            let sample = ((i as i16).wrapping_mul(256)).to_le_bytes();
+            wav.extend_from_slice(&sample);
+        }
+
+        let decoded = decode_bytes_to_stereo_f32(wav, Some("wav"), "mem:test.wav").unwrap();
+        assert_eq!(decoded.sample_rate_hz, 44_100);
+        assert_eq!(decoded.bit_depth, 16);
+        assert_eq!(decoded.channels, 2);
+        assert_eq!(decoded.samples_stereo_f32.len(), (num_frames * 2) as usize);
+    }
 }

@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import { useNavigate } from 'react-router';
+import { useEffect, useRef } from 'react';
+import { useLocation, useNavigate } from 'react-router';
 import { usePlayer } from '@/state/player';
 import { useUi } from '@/state/ui';
 import { findMusicSearchInput, focusAndSelectInput, isSearchFocusShortcut } from './searchShortcut';
@@ -47,6 +47,14 @@ function focusSearch(navigate: ReturnType<typeof useNavigate>) {
  */
 export function useKeyboardShortcuts() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const locationRef = useRef(location);
+  const lastNonSettingsRef = useRef('/home');
+  locationRef.current = location;
+  if (!location.pathname.startsWith('/settings')) {
+    lastNonSettingsRef.current = `${location.pathname}${location.search}${location.hash}`;
+  }
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.altKey) return;
@@ -57,7 +65,7 @@ export function useKeyboardShortcuts() {
         event.preventDefault();
         return focusSearch(navigate);
       }
-      if (typing(event.target)) return;
+      if (typing(event.target) || typing(document.activeElement)) return;
 
       if (event.key === ' ' && !command) {
         // A focused button already answers Space itself.
@@ -78,8 +86,33 @@ export function useKeyboardShortcuts() {
           ui.setFullScreenSearchOpen(false);
           return;
         }
-        if (ui.fullScreen) ui.setFullScreen(false);
-        else if (ui.sidePanel) ui.closeSidePanel();
+        if (ui.fullScreen) {
+          ui.setFullScreen(false);
+          return;
+        }
+        if (ui.sidePanel) {
+          ui.closeSidePanel();
+          return;
+        }
+        if (
+          ui.audioOutputOpen ||
+          ui.audioPipelineOpen ||
+          ui.castModalOpen ||
+          ui.drawerOpen ||
+          document.querySelector('[role="dialog"], [role="menu"]')
+        ) {
+          return;
+        }
+        const { pathname } = locationRef.current;
+        if (pathname.startsWith('/settings/')) {
+          event.preventDefault();
+          void navigate('/settings');
+          return;
+        }
+        if (pathname === '/settings') {
+          event.preventDefault();
+          void navigate(lastNonSettingsRef.current);
+        }
         return;
       }
       if (!command) return;

@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { ChevronRight, Clock, Download, FileMusic, ImageDown, Play, Upload } from 'lucide-react';
+import { ChevronRight, Clock, Cloud, Download, FileMusic, HardDrive, ImageDown, Play, Upload } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { SiSpotify } from 'react-icons/si';
 import { useNavigate, useSearchParams } from 'react-router';
@@ -31,6 +31,7 @@ import { useYtAuth } from '@/extension/useYtAuth';
 import { artworkAtPixels } from '@/lib/artwork';
 import { queryClient } from '@/lib/queryClient';
 import { usePlayer } from '@/state/player';
+import { useSources } from '@/state/sources';
 import { seeAllGrid } from './pageStyles';
 import { settingsUi } from './settingsStyles';
 
@@ -330,6 +331,8 @@ export default function LibraryOverviewPage() {
 
   const downloadsCount = downloadsQuery.data?.length ?? 0;
   const localCount = localTracksQuery.data?.length ?? 0;
+  const webdavConfigured = useSources((s) => s.webdav.configured);
+  const smbConfigured = useSources((s) => s.smb.configured);
 
   return (
     <div className="pb-10">
@@ -458,6 +461,22 @@ export default function LibraryOverviewPage() {
             title="Local Music"
             subtitle={desktop && localCount > 0 ? `${localCount} audio files indexed` : 'Audio files on this PC'}
           />
+          {desktop && webdavConfigured && (
+            <FolderLinkRow
+              to="/library/webdav"
+              icon={<Cloud size={20} strokeWidth={1.9} aria-hidden="true" />}
+              title="WebDAV"
+              subtitle="Music on your server"
+            />
+          )}
+          {desktop && smbConfigured && (
+            <FolderLinkRow
+              to="/library/smb"
+              icon={<HardDrive size={20} strokeWidth={1.9} aria-hidden="true" />}
+              title="SMB"
+              subtitle="Music on a file share"
+            />
+          )}
           {spotifySignedIn && (
             <FolderLinkRow
               to="/spotify"

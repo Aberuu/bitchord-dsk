@@ -2,6 +2,19 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager};
 
+pub const TRAY_ID: &str = "bitchord-tray";
+
+pub fn sync_tray(app: &AppHandle, enabled: bool) -> tauri::Result<()> {
+    if !enabled {
+        let _ = app.remove_tray_by_id(TRAY_ID);
+        return Ok(());
+    }
+    if app.tray_by_id(TRAY_ID).is_some() {
+        return Ok(());
+    }
+    setup_tray(app)
+}
+
 pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let play_pause = MenuItem::with_id(app, "tray_toggle", "Play / Pause", true, None::<&str>)?;
     let next = MenuItem::with_id(app, "tray_next", "Next Track", true, None::<&str>)?;
@@ -12,7 +25,7 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
 
     let menu = Menu::with_items(app, &[&play_pause, &next, &prev, &sep1, &show, &quit])?;
 
-    let mut builder = TrayIconBuilder::with_id("bitchord-tray")
+    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .tooltip("BitChord")
         .show_menu_on_left_click(false)
@@ -28,7 +41,10 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             }
             "tray_show" => reveal_main_window(app),
             "tray_quit" => {
-                app.exit(0);
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::shutdown_and_exit(&handle).await;
+                });
             }
             _ => {}
         })

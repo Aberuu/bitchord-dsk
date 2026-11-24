@@ -1,7 +1,9 @@
 import { AudioLines, Check, ChevronRight, Layers, Wifi } from 'lucide-react';
+import { PrefetchLink } from '@/components/PrefetchLink';
 import { SubpageHeader } from '@/components/SubpageHeader';
 import { useAudioPipeline } from '@/desktop/useAudioPipeline';
 import { usePlayer, type StreamingQuality } from '@/state/player';
+import { summarizeSourcePriority, useSources } from '@/state/sources';
 import { useUi } from '@/state/ui';
 import { Toggle } from './IntegrationSettings';
 import { settingsUi } from './settingsStyles';
@@ -28,6 +30,9 @@ export default function AudioQualitySettingsPage() {
   const streamingQuality = usePlayer((s) => s.streamingQuality);
   const directSourceStream = usePlayer((s) => s.directSourceStream);
   const { setStreamingQuality, setDirectSourceStream } = usePlayer.getState();
+  const addons = useSources((s) => s.addons);
+  const jiosaavnEnabled = useSources((s) => s.jiosaavnEnabled);
+  const prioritySummary = summarizeSourcePriority({ addons, jiosaavnEnabled });
   const pipeline = useAudioPipeline();
   const setPipelineOpen = useUi((s) => s.setAudioPipelineOpen);
 
@@ -74,17 +79,19 @@ export default function AudioQualitySettingsPage() {
             checked={directSourceStream}
             onChange={setDirectSourceStream}
           />
-          <div className={settingsUi.integration}>
+          <PrefetchLink
+            to="/settings/sources"
+            className={`${settingsUi.integration} ${settingsUi.linkRow}`}
+          >
             <span className={settingsUi.iconPlain}>
               <Layers size={18} strokeWidth={2} aria-hidden="true" />
             </span>
             <span className={settingsUi.rowText}>
               <span className="type-title-3 text-primary">Source Priority</span>
-              <span className={settingsUi.rowDetail}>
-                Local Files &amp; Offline Downloads first, then YouTube Music direct stream proxy.
-              </span>
+              <span className={`truncate ${settingsUi.rowDetail}`}>{prioritySummary}</span>
             </span>
-          </div>
+            <ChevronRight size={17} className="text-tertiary" aria-hidden="true" />
+          </PrefetchLink>
           <button
             type="button"
             onClick={() => setPipelineOpen(true)}

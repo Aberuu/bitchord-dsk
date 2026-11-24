@@ -18,10 +18,26 @@ function Harness() {
       {fullScreenSearchOpen && <input type="search" data-music-search="true" data-fullscreen-search="true" />}
       <Routes>
         <Route
+          path="/home"
+          element={<div key="home">Home</div>}
+        />
+        <Route
           path="/settings"
           element={
             <div key="settings">
               <input type="search" placeholder="Search settings" />
+            </div>
+          }
+        />
+        <Route
+          path="/settings/sources"
+          element={<div key="sources">Sources</div>}
+        />
+        <Route
+          path="/settings/quality"
+          element={
+            <div key="quality">
+              <input type="text" placeholder="Quality input" />
             </div>
           }
         />
@@ -118,5 +134,69 @@ describe('useKeyboardShortcuts Ctrl+K', () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     });
     expect(useUi.getState().fullScreen).toBe(false);
+  });
+
+  it('navigates back to /settings on Escape from settings subpages and back from /settings', () => {
+    act(() => {
+      root.render(
+        <MemoryRouter initialEntries={['/home', '/settings', '/settings/sources']}>
+          <Harness />
+        </MemoryRouter>,
+      );
+    });
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/settings/sources');
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/settings');
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/home');
+  });
+
+  it('does not navigate away from /settings/* on Escape when a dialog or input is active', () => {
+    act(() => {
+      root.render(
+        <MemoryRouter initialEntries={['/settings/quality']}>
+          <Harness />
+        </MemoryRouter>,
+      );
+    });
+
+    // Focused input blocks Escape back navigation.
+    const input = host.querySelector<HTMLInputElement>('input[placeholder="Quality input"]')!;
+    act(() => {
+      input.focus();
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/settings/quality');
+
+    // Open dialog blocks Escape back navigation.
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    document.body.appendChild(dialog);
+    act(() => {
+      input.blur();
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/settings/quality');
+    dialog.remove();
+
+    // Open drawer blocks Escape back navigation.
+    act(() => {
+      useUi.setState({ drawerOpen: true });
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/settings/quality');
+
+    // Once overlays are closed, Escape navigates back to /settings.
+    act(() => {
+      useUi.setState({ drawerOpen: false });
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/settings');
   });
 });

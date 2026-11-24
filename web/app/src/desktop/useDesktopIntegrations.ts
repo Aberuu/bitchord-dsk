@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import { artworkAtPixels } from '@/lib/artwork';
 import {
   getPlayhead,
+  handleCastTrackEnded,
   handleNativeTrackEnded,
   onTrackEnded,
   syncNativePlayheadFromSnapshot,
@@ -10,6 +11,8 @@ import {
 } from '@/state/player';
 import { useUi } from '@/state/ui';
 import { queryClient } from '@/lib/queryClient';
+import { registerCastHooks } from './castController';
+import { useCast } from './castStore';
 import { desktopApi, initDesktopBootstrap, isTauriDesktop } from './tauriBridge';
 import { bindDesktopAudioHotplug, DESKTOP_AUDIO_SNAPSHOT_KEY } from './useDesktopAudioDevices';
 import { useListeningRecorder } from './useListeningRecorder';
@@ -46,11 +49,40 @@ export function useDesktopIntegrations(): void {
   }, [theme]);
 
   useEffect(() => {
-    if (!isTauriDesktop()) return;
-    void initDesktopBootstrap();
+    void useCast.getState().refreshSupport();
+    const refreshCast = () => {
+      void useCast.getState().refreshSupport();
+    };
+    window.addEventListener('online', refreshCast);
+    window.addEventListener('offline', refreshCast);
+    window.addEventListener('focus', refreshCast);
+
+    if (!isTauriDesktop()) {
+      return () => {
+        window.removeEventListener('online', refreshCast);
+        window.removeEventListener('offline', refreshCast);
+        window.removeEventListener('focus', refreshCast);
+      };
+    }
+
+    void initDesktopBootstrap().then((info) => {
+      if (info) {
+        useUi.getState().syncMinimizeToTrayFromDesktop(info.minimizeToTray);
+      }
+    });
+    void desktopApi
+      .castGetState()
+      .then((castState) => {
+        useCast.getState().applySessionEvent(castState);
+      })
+      .catch(() => {});
+
     const unbindHotplug = bindDesktopAudioHotplug();
+    const unbindCastHooks = registerCastHooks();
     let unlistenMedia: (() => void) | undefined;
     let unlistenNativeEnd: (() => void) | undefined;
+    let unlistenCastState: (() => void) | undefined;
+    let unlistenCastEnd: (() => void) | undefined;
     let active = true;
     void desktopApi
       .onMediaAction((ev) => {
@@ -89,11 +121,43 @@ export function useDesktopIntegrations(): void {
         if (active) unlistenNativeEnd = fn;
         else fn();
       });
+    void desktopApi
+      .onCastState((castState) => {
+        if (!active) return;
+        useCast.getState().applySessionEvent(castState);
+        if (castState.connected) {
+          if (castState.status === 'playing') {
+            usePlayer.setState({ status: 'playing', error: null });
+          } else if (castState.status === 'paused') {
+            usePlayer.setState({ status: 'paused' });
+          } else if (castState.status === 'buffering' || castState.status === 'loading') {
+            usePlayer.setState({ status: 'buffering' });
+          }
+        }
+      })
+      .then((fn) => {
+        if (active) unlistenCastState = fn;
+        else fn();
+      });
+    void desktopApi
+      .onCastTrackEnded((trackId) => {
+        if (active) handleCastTrackEnded(trackId);
+      })
+      .then((fn) => {
+        if (active) unlistenCastEnd = fn;
+        else fn();
+      });
     return () => {
       active = false;
+      window.removeEventListener('online', refreshCast);
+      window.removeEventListener('offline', refreshCast);
+      window.removeEventListener('focus', refreshCast);
       unbindHotplug();
+      unbindCastHooks();
       unlistenMedia?.();
       unlistenNativeEnd?.();
+      unlistenCastState?.();
+      unlistenCastEnd?.();
     };
   }, []);
 

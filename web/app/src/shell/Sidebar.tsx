@@ -1,4 +1,4 @@
-import { Download, FileMusic, ListMusic, Settings, SlidersHorizontal } from 'lucide-react';
+import { Cloud, Download, FileMusic, HardDrive, ListMusic, Settings, SlidersHorizontal } from 'lucide-react';
 import { useEffect } from 'react';
 import { PrefetchLink, PrefetchNavLink } from '@/components/PrefetchLink';
 import { DeveloperWatermark } from '@/components/DeveloperWatermark';
@@ -21,6 +21,7 @@ import { LIBRARY_SECTIONS, type LibrarySection } from '@/data/music/library';
 import { useLibraryPlaylists, useSignedIn } from '@/data/music/queries';
 import { useSpotifyPlaylists } from '@/data/spotify/queries';
 import { useSpotifySignedIn } from '@/extension/useSpotifyAuth';
+import { useSources } from '@/state/sources';
 import { useUi } from '@/state/ui';
 import { AccountButton } from './AccountButton';
 
@@ -135,6 +136,8 @@ export function Sidebar() {
   const setDrawerOpen = useUi((s) => s.setDrawerOpen);
   const signedIn = useSignedIn();
   const spotifySignedIn = useSpotifySignedIn();
+  const webdavConfigured = useSources((s) => s.webdav.configured);
+  const smbConfigured = useSources((s) => s.smb.configured);
   const desktop = isTauriDesktop();
   const close = () => setDrawerOpen(false);
 
@@ -180,6 +183,26 @@ export function Sidebar() {
                 <span className={navLabel}>Local Music</span>
               </PrefetchNavLink>
             </li>
+            {desktop && webdavConfigured && (
+              <li>
+                <PrefetchNavLink to="/library/webdav" className={item} onClick={close}>
+                  <span className={icon}>
+                    <Cloud size={18} strokeWidth={1.8} aria-hidden="true" />
+                  </span>
+                  <span className={navLabel}>WebDAV</span>
+                </PrefetchNavLink>
+              </li>
+            )}
+            {desktop && smbConfigured && (
+              <li>
+                <PrefetchNavLink to="/library/smb" className={item} onClick={close}>
+                  <span className={icon}>
+                    <HardDrive size={18} strokeWidth={1.8} aria-hidden="true" />
+                  </span>
+                  <span className={navLabel}>SMB</span>
+                </PrefetchNavLink>
+              </li>
+            )}
             <li>
               <PrefetchNavLink to="/settings/audio" className={item} onClick={close}>
                 <span className={icon}>

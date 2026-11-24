@@ -214,6 +214,166 @@ export interface NativePlaybackSnapshot {
   settings: AudioSettings;
 }
 
+export type CastProtocol = 'chromecast' | 'dlna';
+
+export interface CastSupportStatus {
+  supported: boolean;
+  reason: string | null;
+  localIp: string | null;
+  adapterName: string | null;
+  protocols: string[];
+}
+
+export interface CastDevice {
+  id: string;
+  name: string;
+  model: string | null;
+  manufacturer: string | null;
+  protocol: CastProtocol;
+  host: string;
+  port: number;
+  avTransportUrl?: string | null;
+  renderingControlUrl?: string | null;
+}
+
+export interface CastSessionState {
+  connected: boolean;
+  connecting: boolean;
+  device: CastDevice | null;
+  trackId: string | null;
+  status: string;
+  positionSec: number;
+  durationSec: number;
+  volume: number;
+  muted: boolean;
+  error: string | null;
+}
+
+export interface AddonQualityOption {
+  value: string;
+  label: string;
+}
+
+export interface AddonConfig {
+  id: string;
+  name: string;
+  baseUrl: string;
+  enabled: boolean;
+  pickedQuality: string | null;
+  qualityOptions: AddonQualityOption[];
+  allowDownloads: boolean;
+  checkValidLossless: boolean;
+  bitchordAuth: boolean;
+  version: string;
+  defaultSettings: Record<string, string>;
+}
+
+export type AddonHealthStatus =
+  | { state: 'ok'; detail: string; latencyMs: number }
+  | { state: 'rejected'; reason: string }
+  | { state: 'unreachable'; reason: string };
+
+export interface AddonProbeResult {
+  config: AddonConfig;
+  health: AddonHealthStatus;
+}
+
+export interface WebDavStatusView {
+  configured: boolean;
+  url: string;
+  username: string;
+  hasPassword: boolean;
+}
+
+export interface SmbStatusView {
+  configured: boolean;
+  host: string;
+  share: string;
+  basePath: string;
+  username: string;
+  hasPassword: boolean;
+}
+
+export interface SourcesSnapshot {
+  addons: AddonConfig[];
+  jiosaavnEnabled: boolean;
+  trackLengthToleranceSec: number;
+  webdav: WebDavStatusView;
+  smb: SmbStatusView;
+}
+
+export interface SourceCandidateTrack {
+  id: string;
+  sourceId: string;
+  sourceName: string;
+  title: string;
+  artist: string;
+  album: string | null;
+  durationSec: number | null;
+  explicit: boolean;
+  artworkUrl: string | null;
+  streamUrl: string | null;
+  headers: Record<string, string>;
+  mimeType: string | null;
+  format: string | null;
+  codec: string | null;
+  bitrateKbps: number | null;
+  sampleRateHz: number | null;
+  bitDepth: number | null;
+  lossless: boolean;
+}
+
+export interface ResolvedSourceStream {
+  sourceId: string;
+  sourceName: string;
+  trackId: string;
+  url: string;
+  headers: Record<string, string>;
+  mimeType: string | null;
+  format: string | null;
+  codec: string | null;
+  bitrateKbps: number | null;
+  sampleRateHz: number | null;
+  bitDepth: number | null;
+  lossless: boolean;
+}
+
+export interface RegisteredSourceStreamPayload {
+  proxyUrl: string;
+  proxyKey: string;
+  stream: ResolvedSourceStream;
+}
+
+export interface RemoteTrackItem {
+  id: string;
+  sourceKind: 'webdav' | 'smb';
+  title: string;
+  artist: string;
+  album: string | null;
+  fileName: string;
+  codec: string;
+  sizeBytes: number;
+  relPath: string;
+  proxyKey: string;
+  streamProxyUrl: string;
+  artworkProxyUrl: string | null;
+}
+
+export interface CastLoadRequest {
+  device: CastDevice;
+  trackId: string;
+  title: string;
+  artist: string;
+  album?: string | null;
+  artworkUrl?: string | null;
+  streamUrl?: string | null;
+  localFilePath?: string | null;
+  mimeType: string;
+  durationSec: number;
+  startSec: number;
+  autoplay: boolean;
+}
+
 interface BridgeInvokeResult {
   ok: boolean;
   result?: unknown;
@@ -349,4 +509,57 @@ export const desktopApi = {
     listen<Record<string, unknown>>('audio://devices-changed', () => listener()),
   onNativeTrackEnded: (listener: (trackId: string) => void) =>
     listen<{ trackId: string }>('audio://track-ended', (ev) => listener(ev.payload.trackId)),
+
+  castSupportStatus: () => invoke<CastSupportStatus>('cast_support_status'),
+  castGetState: () => invoke<CastSessionState>('cast_get_state'),
+  castDiscover: (timeoutMs?: number) => invoke<CastDevice[]>('cast_discover', { timeoutMs }),
+  castLoadMedia: (request: CastLoadRequest) => invoke<CastSessionState>('cast_load_media', { request }),
+  castPlay: () => invoke<void>('cast_play'),
+  castPause: () => invoke<void>('cast_pause'),
+  castSeek: (seconds: number) => invoke<void>('cast_seek', { seconds }),
+  castSetVolume: (volume: number) => invoke<void>('cast_set_volume', { volume }),
+  castDisconnect: () => invoke<void>('cast_disconnect'),
+  onCastState: (listener: (state: CastSessionState) => void) =>
+    listen<CastSessionState>('cast://state', (ev) => listener(ev.payload)),
+  onCastTrackEnded: (listener: (trackId: string) => void) =>
+    listen<{ trackId: string }>('cast://track-ended', (ev) => listener(ev.payload.trackId)),
+
+  sourcesGetState: () => invoke<SourcesSnapshot>('sources_get_state'),
+  sourcesSetAddons: (addons: AddonConfig[]) => invoke<SourcesSnapshot>('sources_set_addons', { addons }),
+  sourcesSetJiosaavn: (enabled: boolean) => invoke<SourcesSnapshot>('sources_set_jiosaavn', { enabled }),
+  sourcesSetTolerance: (seconds: number) => invoke<SourcesSnapshot>('sources_set_tolerance', { seconds }),
+  sourcesIdentifyAddon: (url: string, existingId?: string | null) =>
+    invoke<AddonProbeResult>('sources_identify_addon', { url, existingId: existingId ?? null }),
+  sourcesProbeAddon: (addonId: string) =>
+    invoke<AddonHealthStatus>('sources_probe_addon', { addonId }),
+  sourcesSearchSource: (sourceId: string, query: string, title?: string | null, artist?: string | null) =>
+    invoke<SourceCandidateTrack[]>('sources_search_source', {
+      sourceId,
+      query,
+      title: title ?? null,
+      artist: artist ?? null,
+    }),
+  sourcesResolveCandidate: (candidate: SourceCandidateTrack) =>
+    invoke<RegisteredSourceStreamPayload>('sources_resolve_candidate', { candidate }),
+
+  webdavTest: (url: string, username: string, password?: string | null) =>
+    invoke<void>('webdav_test', { url, username, password: password ?? null }),
+  webdavSave: (url: string, username: string, password?: string | null) =>
+    invoke<SourcesSnapshot>('webdav_save', { url, username, password: password ?? null }),
+  webdavDisconnect: () => invoke<SourcesSnapshot>('webdav_disconnect'),
+  webdavListTracks: () => invoke<RemoteTrackItem[]>('webdav_list_tracks'),
+
+  smbTest: (host: string, share: string, basePath: string, username: string, password?: string | null) =>
+    invoke<void>('smb_test', { host, share, basePath, username, password: password ?? null }),
+  smbSave: (host: string, share: string, basePath: string, username: string, password?: string | null) =>
+    invoke<SourcesSnapshot>('smb_save', { host, share, basePath, username, password: password ?? null }),
+  smbDisconnect: () => invoke<SourcesSnapshot>('smb_disconnect'),
+  smbListTracks: () => invoke<RemoteTrackItem[]>('smb_list_tracks'),
+
+  audioPlayRemoteSource: (trackId: string, proxyKey: string, ext?: string | null) =>
+    invoke<NativePlaybackSnapshot>('audio_play_remote_source', {
+      trackId,
+      proxyKey,
+      ext: ext ?? null,
+    }),
 };

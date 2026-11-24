@@ -11,10 +11,12 @@ import { startPartySync } from '@/party/partySync';
 import { useDiscordPresence } from '@/playback/discordPresence';
 import { startHistoryReporting } from '@/playback/historyReporting';
 import { startLivePresence } from '@/playback/livePresence';
+import { useSources } from '@/state/sources';
 import { useUi } from '@/state/ui';
 import { AudioOutputModal } from './AudioOutputModal';
 import { AudioPipelineDialog } from './AudioPipelineDialog';
 import { Banner, bannerButtonClass } from './Banner';
+import { CastModal } from './CastModal';
 import { MobileBottomChrome } from './MobileBottomChrome';
 import { MobileTopBar } from './MobileTopBar';
 import { PlayerBar } from './PlayerBar';
@@ -31,6 +33,11 @@ export function AppShell() {
   useKeyboardShortcuts();
   useDiscordPresence();
   useDesktopIntegrations();
+  useEffect(() => {
+    if (desktop) {
+      void useSources.getState().loadFromBackend().catch(() => {});
+    }
+  }, []);
   useEffect(() => {
     resumeSession();
     return startPartySync();
@@ -117,6 +124,7 @@ export function AppShell() {
       )}
       <AudioOutputModal />
       <AudioPipelineDialog />
+      <CastModal />
     </div>
   );
 }

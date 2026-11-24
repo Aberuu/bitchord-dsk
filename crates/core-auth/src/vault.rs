@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -52,6 +53,71 @@ pub struct VaultData {
     pub listenbrainz_token: Option<String>,
     #[serde(default)]
     pub scrobble_primary_artist_only: bool,
+
+    #[serde(default)]
+    pub sources_addons: Vec<StoredAddonConfig>,
+    #[serde(default)]
+    pub sources_jiosaavn_enabled: bool,
+    #[serde(default)]
+    pub sources_track_length_tolerance_sec: Option<u8>,
+    #[serde(default)]
+    pub webdav: Option<StoredWebDavConfig>,
+    #[serde(default)]
+    pub smb: Option<StoredSmbConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredAddonQualityOption {
+    pub value: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredAddonConfig {
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub picked_quality: Option<String>,
+    #[serde(default)]
+    pub quality_options: Vec<StoredAddonQualityOption>,
+    #[serde(default = "default_true")]
+    pub allow_downloads: bool,
+    #[serde(default)]
+    pub check_valid_lossless: bool,
+    #[serde(default)]
+    pub bitchord_auth: bool,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub default_settings: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredWebDavConfig {
+    pub url: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredSmbConfig {
+    pub host: String,
+    pub share: String,
+    #[serde(default)]
+    pub base_path: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
 }
 
 fn default_true() -> bool {
@@ -77,6 +143,11 @@ impl Default for VaultData {
             lastfm_username: None,
             listenbrainz_token: None,
             scrobble_primary_artist_only: false,
+            sources_addons: Vec::new(),
+            sources_jiosaavn_enabled: false,
+            sources_track_length_tolerance_sec: Some(5),
+            webdav: None,
+            smb: None,
         }
     }
 }
