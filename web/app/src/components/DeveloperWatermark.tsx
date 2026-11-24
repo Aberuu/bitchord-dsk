@@ -30,9 +30,10 @@ function handleExternalClick(ev: MouseEvent<HTMLAnchorElement>, url: string) {
 interface DeveloperWatermarkProps {
   variant: 'sidebar' | 'footer' | 'rows';
   version?: string;
+  compact?: boolean;
 }
 
-export function DeveloperWatermark({ variant, version }: DeveloperWatermarkProps) {
+export function DeveloperWatermark({ variant, version, compact = false }: DeveloperWatermarkProps) {
   const wm = getEmbeddedWatermark();
   if (!wm.integrityValid || !wm.credit) return null;
 
@@ -43,20 +44,28 @@ export function DeveloperWatermark({ variant, version }: DeveloperWatermarkProps
     return (
       <div
         data-watermark="visible"
-        className="flex items-center justify-between gap-2 pt-0.5 type-callout text-secondary"
+        className={
+          compact
+            ? 'flex items-center justify-between gap-2 pt-0.5 type-callout text-secondary sm:justify-center sm:pt-0'
+            : 'flex items-center justify-between gap-2 pt-0.5 type-callout text-secondary'
+        }
       >
-        <span className="min-w-0 truncate">{wm.credit}</span>
+        <span className={compact ? 'min-w-0 truncate sm:hidden' : 'min-w-0 truncate'}>{wm.credit}</span>
         <a
           href={wm.githubRepoUrl}
           target="_blank"
           rel="noopener noreferrer"
           onClick={(ev) => handleExternalClick(ev, wm.githubRepoUrl)}
           aria-label={`${wm.credit}, ${wm.githubRepoUrl}`}
-          title={wm.githubRepoUrl}
-          className="inline-flex min-h-[28px] flex-none items-center gap-1.5 rounded-[6px] px-1.5 py-0.5 text-secondary transition-colors hover:bg-quinary hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-key"
+          title={compact ? `${wm.credit} (${repoDisplay})` : wm.githubRepoUrl}
+          className={
+            compact
+              ? 'inline-flex min-h-[28px] flex-none items-center gap-1.5 rounded-[6px] px-1.5 py-0.5 text-secondary transition-colors hover:bg-quinary hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-key sm:size-8 sm:justify-center sm:rounded-nav sm:p-0'
+              : 'inline-flex min-h-[28px] flex-none items-center gap-1.5 rounded-[6px] px-1.5 py-0.5 text-secondary transition-colors hover:bg-quinary hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-key'
+          }
         >
-          <GitHubMark size={13} />
-          <span>{wm.author}</span>
+          <GitHubMark size={compact ? 14 : 13} />
+          <span className={compact ? 'sm:hidden' : undefined}>{wm.author}</span>
         </a>
       </div>
     );

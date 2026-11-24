@@ -20,6 +20,9 @@ interface UiState {
   setCastModalOpen: (open: boolean) => void;
   drawerOpen: boolean;
   setDrawerOpen: (open: boolean) => void;
+  sidebarCompact: boolean;
+  setSidebarCompact: (compact: boolean) => void;
+  toggleSidebarCompact: () => void;
   installBannerDismissed: boolean;
   dismissInstallBanner: () => void;
   theme: ThemePreference;
@@ -32,6 +35,7 @@ interface UiState {
 const BANNER_KEY = 'bitchord:install-banner-dismissed';
 const THEME_KEY = 'bitchord:theme';
 const TRAY_KEY = 'bitchord:minimize-to-tray';
+const SIDEBAR_COMPACT_KEY = 'bitchord:sidebar-compact';
 
 function readTheme(): ThemePreference {
   const saved = localStorage.getItem(THEME_KEY);
@@ -41,6 +45,10 @@ function readTheme(): ThemePreference {
 function readMinimizeToTray(): boolean {
   const saved = localStorage.getItem(TRAY_KEY);
   return saved === null ? false : saved === '1';
+}
+
+function readSidebarCompact(): boolean {
+  return localStorage.getItem(SIDEBAR_COMPACT_KEY) === '1';
 }
 
 export const useUi = create<UiState>()((set) => ({
@@ -60,6 +68,17 @@ export const useUi = create<UiState>()((set) => ({
   setCastModalOpen: (castModalOpen) => set({ castModalOpen }),
   drawerOpen: false,
   setDrawerOpen: (drawerOpen) => set({ drawerOpen }),
+  sidebarCompact: readSidebarCompact(),
+  setSidebarCompact: (sidebarCompact) => {
+    localStorage.setItem(SIDEBAR_COMPACT_KEY, sidebarCompact ? '1' : '0');
+    set({ sidebarCompact });
+  },
+  toggleSidebarCompact: () =>
+    set((s) => {
+      const next = !s.sidebarCompact;
+      localStorage.setItem(SIDEBAR_COMPACT_KEY, next ? '1' : '0');
+      return { sidebarCompact: next };
+    }),
   installBannerDismissed: sessionStorage.getItem(BANNER_KEY) === '1',
   dismissInstallBanner: () => {
     sessionStorage.setItem(BANNER_KEY, '1');

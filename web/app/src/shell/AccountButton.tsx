@@ -1,4 +1,4 @@
-import { ArrowUpRight, ChevronsUpDown } from 'lucide-react';
+import { ArrowUpRight, ChevronsUpDown, User } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { Menu, MenuHeader, MenuItem, MenuSeparator } from '@/components/Menu';
 import { desktopApi, isTauriDesktop } from '@/desktop/tauriBridge';
@@ -20,7 +20,13 @@ function Avatar({ src, name, size }: { src: string | null; name: string; size: n
   );
 }
 
-export function AccountButton() {
+function actionPillClass(compact: boolean): string {
+  return compact
+    ? `${pill} sm:self-auto sm:grid sm:size-10 sm:place-items-center sm:rounded-nav sm:px-0 sm:py-0`
+    : pill;
+}
+
+export function AccountButton({ compact = false }: { compact?: boolean }) {
   const status = useYtAuth();
   const select = useSelectChannel();
   const connect = useSetConnected();
@@ -39,28 +45,46 @@ export function AccountButton() {
 
   if (!auth.browserSignedIn) {
     return (
-      <button type="button" className={pill} onClick={openSignIn}>
-        Sign In
+      <button
+        type="button"
+        className={actionPillClass(compact)}
+        aria-label="Sign In"
+        title={compact ? 'Sign In' : undefined}
+        onClick={openSignIn}
+      >
+        <User size={17} strokeWidth={1.9} className={compact ? 'hidden sm:block' : 'hidden'} aria-hidden="true" />
+        <span className={compact ? 'sm:sr-only' : undefined}>Sign In</span>
       </button>
     );
   }
   if (!auth.connected) {
     return (
-      <button type="button" className={pill} onClick={() => connect.mutate(true)} disabled={connect.isPending}>
-        Connect YouTube Music
+      <button
+        type="button"
+        className={actionPillClass(compact)}
+        aria-label="Connect YouTube Music"
+        title={compact ? 'Connect YouTube Music' : undefined}
+        onClick={() => connect.mutate(true)}
+        disabled={connect.isPending}
+      >
+        <User size={17} strokeWidth={1.9} className={compact ? 'hidden sm:block' : 'hidden'} aria-hidden="true" />
+        <span className={compact ? 'sm:sr-only' : undefined}>Connect YouTube Music</span>
       </button>
     );
   }
   if (!auth.active) {
+    const label = refresh.isPending ? 'Reading account…' : 'Sign In Again';
     return (
       <button
         type="button"
-        className={pill}
-        title={auth.problem ?? undefined}
+        className={actionPillClass(compact)}
+        aria-label={label}
+        title={auth.problem ?? (compact ? label : undefined)}
         onClick={() => (desktop ? openSignIn() : refresh.mutate())}
         disabled={refresh.isPending}
       >
-        {refresh.isPending ? 'Reading account…' : 'Sign In Again'}
+        <User size={17} strokeWidth={1.9} className={compact ? 'hidden sm:block' : 'hidden'} aria-hidden="true" />
+        <span className={compact ? 'sm:sr-only' : undefined}>{label}</span>
       </button>
     );
   }
@@ -72,14 +96,23 @@ export function AccountButton() {
     <>
       <button
         type="button"
-        className="flex w-full min-w-0 items-center gap-2 rounded-nav px-1 py-1.5 text-start type-body-reduced text-primary hover:bg-quinary aria-expanded:bg-quinary"
+        className={`flex w-full min-w-0 items-center gap-2 rounded-nav px-1 py-1.5 text-start type-body-reduced text-primary hover:bg-quinary aria-expanded:bg-quinary${compact ? ' sm:mx-auto sm:size-10 sm:justify-center sm:gap-0 sm:px-0 sm:py-0' : ''}`}
         aria-haspopup="menu"
         aria-expanded={anchor !== null}
+        aria-label={compact ? `${active.name} account` : undefined}
+        title={compact ? active.name : undefined}
         onClick={(event) => setAnchor(anchor ? null : event.currentTarget)}
       >
         <Avatar src={active.avatarUrl} name={active.name} size={24} />
-        <span className="min-w-0 flex-1 truncate">{active.name}</span>
-        {multiple && <ChevronsUpDown size={14} strokeWidth={2} className="flex-none text-secondary" aria-hidden="true" />}
+        <span className={compact ? 'min-w-0 flex-1 truncate sm:sr-only' : 'min-w-0 flex-1 truncate'}>{active.name}</span>
+        {multiple && (
+          <ChevronsUpDown
+            size={14}
+            strokeWidth={2}
+            className={compact ? 'flex-none text-secondary sm:hidden' : 'flex-none text-secondary'}
+            aria-hidden="true"
+          />
+        )}
       </button>
       {anchor && (
         <Menu anchor={anchor} placement="above-start" onClose={close} label="Account">

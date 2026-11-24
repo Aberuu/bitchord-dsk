@@ -21,6 +21,7 @@ import { MobileBottomChrome } from './MobileBottomChrome';
 import { MobileTopBar } from './MobileTopBar';
 import { PlayerBar } from './PlayerBar';
 import { Sidebar } from './Sidebar';
+import { SidebarToggleButton } from './SidebarToggleButton';
 import { SidePanel } from './SidePanel';
 import { TitleBar } from './TitleBar';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
@@ -53,6 +54,7 @@ export function AppShell() {
   const bannerDismissed = useUi((s) => s.installBannerDismissed);
   const dismissBanner = useUi((s) => s.dismissInstallBanner);
   const fullScreen = useUi((s) => s.fullScreen);
+  const sidebarCompact = useUi((s) => s.sidebarCompact);
   const [fullScreenMounted, setFullScreenMounted] = useState(fullScreen);
   useEffect(() => {
     if (fullScreen) setFullScreenMounted(true);
@@ -91,19 +93,22 @@ export function AppShell() {
 
   return (
     <div className="relative isolate flex h-full flex-col">
-      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div
+        className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+        data-sidebar-compact={sidebarCompact || undefined}
+      >
         {/* Continuous backdrop spans y=0..100% behind TitleBar and main to avoid a subpixel DPI seam over transparent Mica. */}
         <div
           aria-hidden="true"
           data-page-backdrop="true"
-          className="pointer-events-none absolute inset-y-0 right-0 left-(--web-navigation-width) -z-1 bg-(--scrollablePageBG) max-sm:left-0"
+          className="pointer-events-none absolute inset-y-0 right-0 left-(--web-navigation-width) -z-1 bg-(--scrollablePageBG) sm:transition-[left] sm:duration-(--duration-panel) sm:ease-panel max-sm:left-0"
         />
         {desktop && <div className="h-9 flex-none" aria-hidden="true" />}
         <div className="relative min-h-0 flex-1 overflow-hidden">
           <MobileTopBar />
           <main
             id="scrollable-page"
-            className="absolute inset-0 overflow-x-hidden overflow-y-auto pl-(--web-navigation-width) [scrollbar-gutter:stable] data-tint:bg-(--page-tint) data-tint:transition-[background-color] data-tint:duration-300 data-tint:ease-in max-sm:pt-(--mobile-top-bar-height) max-sm:pl-0"
+            className="absolute inset-0 overflow-x-hidden overflow-y-auto pl-(--web-navigation-width) [scrollbar-gutter:stable] data-tint:bg-(--page-tint) data-tint:transition-[background-color] data-tint:duration-300 data-tint:ease-in sm:transition-[padding-left] sm:duration-(--duration-panel) sm:ease-panel max-sm:pt-(--mobile-top-bar-height) max-sm:pl-0"
           >
             <div className="min-h-full pb-[calc(var(--player-pill-height)+var(--player-bottom-offset)+40px)] max-sm:pb-[156px]">
               <Outlet />
@@ -114,6 +119,11 @@ export function AppShell() {
           <SidePanel />
         </div>
         <Sidebar />
+        {!desktop && (
+          <div className="pointer-events-none absolute top-0 left-0 z-[calc(var(--z-web-chrome)+1)] hidden h-11 w-(--web-navigation-compact-width) items-center justify-center sm:flex">
+            <SidebarToggleButton className="pointer-events-auto grid size-9 place-items-center rounded-nav text-secondary transition-colors hover:bg-quinary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-key" />
+          </div>
+        )}
         <TitleBar />
       </div>
       {banner}

@@ -199,4 +199,29 @@ describe('useKeyboardShortcuts Ctrl+K', () => {
     });
     expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/settings');
   });
+
+  it('toggles compact sidebar on Ctrl+B and prevents default bookmark shortcut', () => {
+    useUi.setState({ sidebarCompact: false });
+    act(() => {
+      root.render(
+        <MemoryRouter initialEntries={['/home']}>
+          <Harness />
+        </MemoryRouter>,
+      );
+    });
+
+    const openEv = new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => {
+      window.dispatchEvent(openEv);
+    });
+    expect(openEv.defaultPrevented).toBe(true);
+    expect(useUi.getState().sidebarCompact).toBe(true);
+
+    const closeEv = new KeyboardEvent('keydown', { key: 'B', ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => {
+      window.dispatchEvent(closeEv);
+    });
+    expect(closeEv.defaultPrevented).toBe(true);
+    expect(useUi.getState().sidebarCompact).toBe(false);
+  });
 });

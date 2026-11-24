@@ -2,6 +2,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Copy, Minus, Square, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { isTauriDesktop } from '@/desktop/tauriBridge';
+import { SidebarToggleButton } from './SidebarToggleButton';
 
 const captionBtn =
   'grid h-9 w-[46px] place-items-center text-secondary transition-colors duration-100 hover:bg-quinary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-key';
@@ -37,9 +38,12 @@ export function TitleBar() {
   const win = getCurrentWindow();
   return (
     <header
-      className="absolute inset-x-0 top-0 z-[calc(var(--z-web-chrome)+2)] flex h-9 items-center justify-end bg-transparent select-none"
+      className="absolute inset-x-0 top-0 z-[calc(var(--z-web-chrome)+2)] flex h-9 items-center bg-transparent select-none"
       data-tauri-drag-region
     >
+      <div className="hidden h-full w-(--web-navigation-compact-width) flex-none items-center justify-center sm:flex">
+        <SidebarToggleButton className={captionBtn} />
+      </div>
       <div className="h-full flex-1" data-tauri-drag-region onDoubleClick={() => void win.toggleMaximize()} />
       <div className="flex h-full flex-none items-center">
         <button

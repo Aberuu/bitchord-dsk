@@ -65,6 +65,12 @@ export function useKeyboardShortcuts() {
         event.preventDefault();
         return focusSearch(navigate);
       }
+      if (command && !event.shiftKey && (event.key === 'b' || event.key === 'B')) {
+        if ((event.target as HTMLElement | null)?.isContentEditable) return;
+        event.preventDefault();
+        useUi.getState().toggleSidebarCompact();
+        return;
+      }
       if (typing(event.target) || typing(document.activeElement)) return;
 
       if (event.key === ' ' && !command) {

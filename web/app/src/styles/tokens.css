@@ -36,6 +36,7 @@
 
   /* ---- Layout ------------------------------------------------------------ */
   --web-navigation-width: 260px;
+  --web-navigation-compact-width: 68px;
   --body-gutter: 25px;
   --player-pill-height: 56px;
   --player-bottom-offset: 20px;
@@ -155,6 +156,12 @@
 @media (min-width: 484px) and (max-width: 767.31px) {
   :root {
     --web-navigation-width: 33.8842975207vw;
+  }
+}
+
+@media (min-width: 484px) {
+  [data-sidebar-compact='true'] {
+    --web-navigation-width: var(--web-navigation-compact-width);
   }
 }
 
