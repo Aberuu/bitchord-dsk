@@ -339,7 +339,12 @@ export default function SettingsPage() {
                 subtitle="Where audio comes from and the order used"
               />
               <label className={settingsUi.controlRow}>
-                <span className="pl-[40px] type-title-3 text-primary">Direct Source Stream</span>
+                <span className={`${settingsUi.rowText} pl-[40px]`}>
+                  <span>Direct Source Stream</span>
+                  <span className={settingsUi.rowDetail}>
+                    Wait for addon streams from 0:00 instead of starting immediately and upgrading in the background.
+                  </span>
+                </span>
                 <input
                   type="checkbox"
                   className={settingsUi.switch}

@@ -12,7 +12,7 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -91,6 +91,7 @@ pub struct NativeAudioEngine {
     tap: Arc<AudioTapBuffer>,
     route_lock: Mutex<()>,
     worker: Mutex<Option<WorkerHandle>>,
+    request_seq: AtomicU64,
     on_ended: Arc<dyn Fn(String) + Send + Sync>,
 }
 
@@ -112,8 +113,17 @@ impl NativeAudioEngine {
             tap: Arc::new(AudioTapBuffer::new()),
             route_lock: Mutex::new(()),
             worker: Mutex::new(None),
+            request_seq: AtomicU64::new(0),
             on_ended,
         }
+    }
+
+    pub fn next_request_seq(&self) -> u64 {
+        self.request_seq.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    pub fn current_request_seq(&self) -> u64 {
+        self.request_seq.load(Ordering::SeqCst)
     }
 
     pub fn tap_buffer(&self) -> Arc<AudioTapBuffer> {
@@ -287,6 +297,7 @@ impl NativeAudioEngine {
     }
 
     pub fn stop(&self) {
+        self.request_seq.fetch_add(1, Ordering::SeqCst);
         let _route = self.route_lock.lock();
         self.stop_worker_locked();
         self.tap.flush();
@@ -298,6 +309,7 @@ impl NativeAudioEngine {
     }
 
     pub fn start_tap_mode(&self) -> Result<NativePlaybackSnapshot> {
+        self.request_seq.fetch_add(1, Ordering::SeqCst);
         let _route = self.route_lock.lock();
         // Drop the shared lock before querying worker liveness or reading snapshot() to avoid reentrant Mutex deadlock.
         let tap_active = self.shared.lock().tap_active;
@@ -352,8 +364,23 @@ impl NativeAudioEngine {
     }
 
     pub fn play_local_file(&self, track_id: String, path: PathBuf) -> Result<NativePlaybackSnapshot> {
+        self.play_local_file_guarded(track_id, path, 0.0, None)
+    }
+
+    pub fn play_local_file_guarded(
+        &self,
+        track_id: String,
+        path: PathBuf,
+        start_sec: f64,
+        expected_seq: Option<u64>,
+    ) -> Result<NativePlaybackSnapshot> {
+        if let Some(seq) = expected_seq {
+            if self.current_request_seq() != seq {
+                return Err(anyhow!("SupersededError"));
+            }
+        }
         let decoded = Arc::new(decode_file_to_stereo_f32(&path)?);
-        self.play_decoded_audio(track_id, decoded)
+        self.play_decoded_audio(track_id, decoded, start_sec, expected_seq)
     }
 
     pub fn play_encoded_bytes(
@@ -362,26 +389,55 @@ impl NativeAudioEngine {
         bytes: Vec<u8>,
         ext: Option<&str>,
     ) -> Result<NativePlaybackSnapshot> {
+        self.play_encoded_bytes_guarded(track_id, bytes, ext, 0.0, None)
+    }
+
+    pub fn play_encoded_bytes_guarded(
+        &self,
+        track_id: String,
+        bytes: Vec<u8>,
+        ext: Option<&str>,
+        start_sec: f64,
+        expected_seq: Option<u64>,
+    ) -> Result<NativePlaybackSnapshot> {
+        if let Some(seq) = expected_seq {
+            if self.current_request_seq() != seq {
+                return Err(anyhow!("SupersededError"));
+            }
+        }
         let decoded = Arc::new(decode_bytes_to_stereo_f32(bytes, ext, &track_id)?);
-        self.play_decoded_audio(track_id, decoded)
+        self.play_decoded_audio(track_id, decoded, start_sec, expected_seq)
     }
 
     fn play_decoded_audio(
         &self,
         track_id: String,
         decoded: Arc<DecodedAudio>,
+        start_sec: f64,
+        expected_seq: Option<u64>,
     ) -> Result<NativePlaybackSnapshot> {
         let _route = self.route_lock.lock();
+        if let Some(seq) = expected_seq {
+            if self.current_request_seq() != seq {
+                return Err(anyhow!("SupersededError"));
+            }
+        }
         self.stop_worker_locked();
         self.tap.flush();
 
         {
             let mut guard = self.shared.lock();
+            let max_frames = (decoded.samples_stereo_f32.len() / 2) as f64;
+            let initial_cursor = if start_sec.is_finite() && start_sec > 0.0 {
+                (start_sec * decoded.sample_rate_hz as f64).min(max_frames)
+            } else {
+                0.0
+            };
             guard.tap_active = false;
             guard.track = Some(ActiveTrack {
                 id: track_id,
                 audio: Arc::clone(&decoded),
-                frame_cursor: 0.0,
+                frame_cursor: initial_cursor,
                 next_audio: None,
             });
             guard.status = "playing".into();
@@ -1067,5 +1123,21 @@ mod tests {
         );
 
         assert_eq!(out, source_pcm);
+    }
+
+    #[test]
+    fn superseded_request_seq_rejects_stale_decode_and_stop_bumps_seq() {
+        let engine = NativeAudioEngine::new(Arc::new(|_| {}));
+        let stale_seq = engine.next_request_seq();
+        let active_seq = engine.next_request_seq();
+        assert_ne!(stale_seq, active_seq);
+
+        let err = engine
+            .play_encoded_bytes_guarded("track-stale".into(), vec![0u8; 16], Some("flac"), 0.0, Some(stale_seq))
+            .expect_err("stale sequence must be rejected before decoding");
+        assert!(err.to_string().contains("SupersededError"));
+
+        engine.stop();
+        assert!(engine.current_request_seq() > active_seq);
     }
 }

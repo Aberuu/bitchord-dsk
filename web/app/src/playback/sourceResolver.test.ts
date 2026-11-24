@@ -176,4 +176,48 @@ describe('sourceResolver & Track length tolerance', () => {
     expect(resolved?.payload.stream.sourceId).toBe('jiosaavn');
     expect(resolved?.payload.proxyUrl).toContain('remote/src-1');
   });
+
+  it('rejects same-title songs from unrelated artists and 30-second previews', () => {
+    const target = buildMatchTargetFromTrack(TARGET_TRACK);
+    const wrongArtist = makeCandidate({
+      id: 'wrong-artist',
+      artist: 'Unrelated Cover Band',
+      durationSec: 200,
+    });
+    const previewClip = makeCandidate({
+      id: 'preview-30s',
+      artist: 'Mei Semones',
+      durationSec: 30,
+    });
+
+    expect(pickMatchingCandidate([wrongArtist], target, 5)).toBeNull();
+    expect(pickMatchingCandidate([previewClip], target, 5)).toBeNull();
+  });
+
+  it('aborts remaining source searches as soon as shouldCancel returns true', async () => {
+    useSources.setState({
+      loaded: true,
+      addons: [BASE_ADDON],
+      jiosaavnEnabled: true,
+      trackLengthToleranceSec: 5,
+    });
+
+    let cancelled = false;
+    const searchSpy = vi.spyOn(desktopApi, 'sourcesSearchSource').mockImplementation(async () => {
+      cancelled = true;
+      return [makeCandidate()];
+    });
+    const resolveSpy = vi.spyOn(desktopApi, 'sourcesResolveCandidate');
+
+    const resolved = await resolveReplacementSource(TARGET_TRACK, {
+      streamingQuality: 'lossless',
+      outputMode: 'shared',
+      activeDevice: null,
+      shouldCancel: () => cancelled,
+    });
+
+    expect(resolved).toBeNull();
+    expect(searchSpy).toHaveBeenCalledTimes(1);
+    expect(resolveSpy).not.toHaveBeenCalled();
+  });
 });

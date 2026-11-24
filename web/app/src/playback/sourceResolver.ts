@@ -1,6 +1,8 @@
 import {
+  artistNames,
   queries as buildMatchQueries,
   score as scoreMatch,
+  sharesArtist,
   withinSeconds,
   type MatchCandidate,
   type MatchTarget,
@@ -23,6 +25,9 @@ export interface ReplacementResolveOptions {
   streamingQuality: StreamingQuality;
   outputMode: OutputMode;
   activeDevice: AudioDeviceInfo | null;
+  shouldCancel?: () => boolean;
+  maxQueriesPerSource?: number;
+  timeoutMs?: number;
 }
 
 export interface ResolvedPlaybackSource {
@@ -65,9 +70,8 @@ export function toMatchCandidate(candidate: SourceCandidateTrack): MatchCandidat
 }
 
 /**
- * Picks the highest-scoring candidate matching [target] that obeys [toleranceSec].
- * When both target and candidate durations are positive, replacement streams whose
- * duration delta exceeds [toleranceSec] are rejected.
+ * Picks the highest-scoring candidate matching [target] that obeys [toleranceSec],
+ * shares an artist credit when known, and rejects short preview clips.
  */
 export function pickMatchingCandidate(
   candidates: SourceCandidateTrack[],
@@ -76,8 +80,28 @@ export function pickMatchingCandidate(
 ): SourceCandidateTrack | null {
   let winner: SourceCandidateTrack | null = null;
   let winnerScore = -Infinity;
+  const wantedArtist = target.artist?.trim() ?? '';
+  const mustShareArtist = artistNames(wantedArtist).length > 0;
 
   for (const cand of candidates) {
+    if (
+      target.durationSec != null &&
+      target.durationSec > 45 &&
+      cand.durationSec != null &&
+      cand.durationSec > 0 &&
+      cand.durationSec <= 35
+    ) {
+      continue;
+    }
+
+    if (
+      mustShareArtist &&
+      !sharesArtist(wantedArtist, cand.artist) &&
+      !sharesArtist(wantedArtist, cand.title)
+    ) {
+      continue;
+    }
+
     const matchCand = toMatchCandidate(cand);
     const points = scoreMatch(matchCand, target);
     if (points === null) continue;
@@ -105,6 +129,35 @@ function shouldTryAddon(addon: AddonConfig, opts: ReplacementResolveOptions): bo
   return true;
 }
 
+export function listEligibleSourceIds(opts: ReplacementResolveOptions): string[] {
+  const { addons, jiosaavnEnabled } = useSources.getState();
+  const ids: string[] = [];
+  for (const addon of addons) {
+    if (shouldTryAddon(addon, opts)) ids.push(addon.id);
+  }
+  if (jiosaavnEnabled) {
+    ids.push('jiosaavn');
+  }
+  return ids;
+}
+
+function withOptionalTimeout<T>(promise: Promise<T>, timeoutMs?: number): Promise<T> {
+  if (!timeoutMs || timeoutMs <= 0) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Source lookup timed out')), timeoutMs);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 /**
  * Walks configured sources in priority order (enabled user Addons, then JioSaavn if opted in)
  * and resolves the first recording matching [track] within the configured tolerance.
@@ -115,20 +168,16 @@ export async function resolveReplacementSource(
   opts: ReplacementResolveOptions,
 ): Promise<ResolvedPlaybackSource | null> {
   if (!isTauriDesktop()) return null;
+  if (opts.shouldCancel?.()) return null;
 
   const sources = useSources.getState();
   if (!sources.loaded) {
     await sources.loadFromBackend().catch(() => {});
   }
-  const { addons, jiosaavnEnabled, trackLengthToleranceSec } = useSources.getState();
+  if (opts.shouldCancel?.()) return null;
 
-  const candidateSourceIds: string[] = [];
-  for (const addon of addons) {
-    if (shouldTryAddon(addon, opts)) candidateSourceIds.push(addon.id);
-  }
-  if (jiosaavnEnabled) {
-    candidateSourceIds.push('jiosaavn');
-  }
+  const { trackLengthToleranceSec } = useSources.getState();
+  const candidateSourceIds = listEligibleSourceIds(opts);
   if (!candidateSourceIds.length) return null;
 
   const target = buildMatchTargetFromTrack(track);
@@ -136,34 +185,42 @@ export async function resolveReplacementSource(
   const primaryQuery = queryList[0] ?? `${track.title} ${target.artist ?? ''}`.trim();
   if (!primaryQuery) return null;
 
-  for (const sourceId of candidateSourceIds) {
-    for (const q of queryList.slice(0, 2)) {
-      let candidates: SourceCandidateTrack[] = [];
-      try {
-        candidates = await desktopApi.sourcesSearchSource(
-          sourceId,
-          q,
-          track.title,
-          target.artist ?? null,
-        );
-      } catch {
-        // Source unreachable or timed out: try next query or source cleanly.
-        continue;
-      }
+  const maxQueries = Math.max(1, opts.maxQueriesPerSource ?? 2);
+  const queriesToRun = queryList.length ? queryList.slice(0, maxQueries) : [primaryQuery];
 
-      const best = pickMatchingCandidate(candidates, target, trackLengthToleranceSec);
-      if (!best) continue;
+  const runWalk = async (): Promise<ResolvedPlaybackSource | null> => {
+    for (const sourceId of candidateSourceIds) {
+      for (const q of queriesToRun) {
+        if (opts.shouldCancel?.()) return null;
+        let candidates: SourceCandidateTrack[] = [];
+        try {
+          candidates = await desktopApi.sourcesSearchSource(
+            sourceId,
+            q,
+            track.title,
+            target.artist ?? null,
+          );
+        } catch {
+          continue;
+        }
+        if (opts.shouldCancel?.()) return null;
 
-      try {
-        const payload = await desktopApi.sourcesResolveCandidate(best);
-        return { payload, candidate: best };
-      } catch {
-        continue;
+        const best = pickMatchingCandidate(candidates, target, trackLengthToleranceSec);
+        if (!best) continue;
+
+        try {
+          const payload = await desktopApi.sourcesResolveCandidate(best);
+          if (opts.shouldCancel?.()) return null;
+          return { payload, candidate: best };
+        } catch {
+          continue;
+        }
       }
     }
-  }
+    return null;
+  };
 
-  return null;
+  return withOptionalTimeout(runWalk(), opts.timeoutMs).catch(() => null);
 }
 
 export function extensionForResolvedStream(payload: RegisteredSourceStreamPayload): string | null {

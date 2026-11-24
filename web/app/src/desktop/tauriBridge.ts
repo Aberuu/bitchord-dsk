@@ -493,8 +493,12 @@ export const desktopApi = {
   audioListDevices: () => invoke<AudioDeviceInfo[]>('audio_list_devices'),
   audioSnapshot: () => invoke<NativePlaybackSnapshot>('audio_snapshot'),
   audioUpdateSettings: (settings: AudioSettings) => invoke<NativePlaybackSnapshot>('audio_update_settings', { settings }),
-  audioPlayFile: (trackId: string, filePath: string) =>
-    invoke<NativePlaybackSnapshot>('audio_play_file', { trackId, filePath }),
+  audioPlayFile: (trackId: string, filePath: string, startSec?: number | null) =>
+    invoke<NativePlaybackSnapshot>('audio_play_file', {
+      trackId,
+      filePath,
+      startSec: startSec ?? null,
+    }),
   audioQueueGaplessNext: (trackId: string, filePath: string) =>
     invoke<void>('audio_queue_gapless_next', { trackId, filePath }),
   audioPause: () => invoke<void>('audio_pause'),
@@ -556,10 +560,16 @@ export const desktopApi = {
   smbDisconnect: () => invoke<SourcesSnapshot>('smb_disconnect'),
   smbListTracks: () => invoke<RemoteTrackItem[]>('smb_list_tracks'),
 
-  audioPlayRemoteSource: (trackId: string, proxyKey: string, ext?: string | null) =>
+  audioPlayRemoteSource: (
+    trackId: string,
+    proxyKey: string,
+    ext?: string | null,
+    startSec?: number | null,
+  ) =>
     invoke<NativePlaybackSnapshot>('audio_play_remote_source', {
       trackId,
       proxyKey,
       ext: ext ?? null,
+      startSec: startSec ?? null,
     }),
 };

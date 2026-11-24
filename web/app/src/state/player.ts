@@ -13,8 +13,12 @@ import {
 } from '@/desktop/tauriBridge';
 import {
   extensionForResolvedStream,
+  listEligibleSourceIds,
   resolveReplacementSource,
+  type ReplacementResolveOptions,
+  type ResolvedPlaybackSource,
 } from '@/playback/sourceResolver';
+import { useSources } from '@/state/sources';
 import { DESKTOP_AUDIO_DEVICES_KEY } from '@/desktop/useDesktopAudioDevices';
 import { extensionQueryKey } from '@/extension/useExtension';
 import { artworkAtPixels } from '@/lib/artwork';
@@ -95,6 +99,7 @@ interface Settings {
 }
 
 export interface NativePlayheadState {
+  trackId?: string | null;
   positionSec: number;
   durationSec: number;
   playbackRate: number;
@@ -187,18 +192,30 @@ const DEFAULT_SETTINGS: Settings = {
   loudnessNormalization: true,
   skipSilence: false,
   spatialAudio: false,
-  directSourceStream: true,
+  directSourceStream: false,
   streamingQuality: 'lossless',
 };
 
+interface PersistedSettings extends Partial<Settings> {
+  directSourceStreamMigratedV2?: boolean;
+}
+
 function loadSettings(): Settings {
   try {
-    const parsed = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') as Partial<Settings>;
-    return {
+    const parsed = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') as PersistedSettings;
+    const migratedDirect = parsed.directSourceStreamMigratedV2
+      ? (parsed.directSourceStream ?? false)
+      : false;
+    const resolved: Settings = {
       ...DEFAULT_SETTINGS,
       ...parsed,
+      directSourceStream: migratedDirect,
       eq: { ...DEFAULT_EQ_CONFIG, ...(parsed.eq ?? {}) },
     };
+    if (!parsed.directSourceStreamMigratedV2 && localStorage.getItem(SETTINGS_KEY) !== null) {
+      saveSettings(resolved);
+    }
+    return resolved;
   } catch {
     return DEFAULT_SETTINGS;
   }
@@ -249,6 +266,7 @@ function saveSettings(state: Settings) {
       skipSilence,
       spatialAudio,
       directSourceStream,
+      directSourceStreamMigratedV2: true,
       streamingQuality,
     }),
   );
@@ -259,13 +277,35 @@ function saveSettings(state: Settings) {
 interface Deck {
   engine: YouTubeEngine;
   audio: HTMLAudioElement;
-  /** The crossfade's share of the volume, 0–1. */
+  /** The crossfade's share of the volume, 0 to 1. */
   gain: number;
+  loadedTrackId: string | null;
+  directUrlActive: boolean;
 }
 
 let decks: Deck[] | null = null;
 let decksPromise: Promise<Deck[]> | null = null;
 let active = 0;
+let pendingStartSec = 0;
+let activeUpgradeCancel: (() => void) | null = null;
+
+function cancelQualityUpgrade() {
+  if (!activeUpgradeCancel) return;
+  const cancel = activeUpgradeCancel;
+  activeUpgradeCancel = null;
+  cancel();
+}
+
+function silenceDeck(deck: Deck) {
+  deck.loadedTrackId = null;
+  deck.audio.pause();
+  void deck.engine.stop().catch(() => {});
+  if (deck.directUrlActive) {
+    deck.audio.removeAttribute('src');
+    deck.audio.load();
+    deck.directUrlActive = false;
+  }
+}
 
 /** The audio element in front, if playback has started at least once. */
 export function getAudio(): HTMLAudioElement | null {
@@ -301,8 +341,15 @@ export function getPlayhead(): { sec: number; paused: boolean } | null {
   if (castHooks?.isConnected()) {
     return castHooks.getPlayhead();
   }
-  const { mixing, nowPlaying, nativeActive, nativePlayhead } = usePlayer.getState();
+  const { mixing, nowPlaying, status, nativeActive, nativePlayhead } = usePlayer.getState();
+  if (!nowPlaying) return null;
+  if (status === 'loading') {
+    return { sec: pendingStartSec, paused: true };
+  }
   if (nativeActive && nativePlayhead) {
+    if (nativePlayhead.trackId && nativePlayhead.trackId !== nowPlaying.videoId) {
+      return { sec: pendingStartSec, paused: true };
+    }
     const elapsed = nativePlayhead.paused
       ? 0
       : ((performance.now() - nativePlayhead.updatedAtMs) / 1000) * nativePlayhead.playbackRate;
@@ -312,12 +359,15 @@ export function getPlayhead(): { sec: number; paused: boolean } | null {
     );
     return { sec, paused: nativePlayhead.paused };
   }
-  const audio = getAudio();
-  if (mixing && graph && nowPlaying) {
+  if (mixing && graph) {
     const sec = graph.dj.mixPlayhead(nowPlaying.videoId);
     if (sec !== null) return { sec, paused: false };
   }
-  return audio ? { sec: audio.currentTime, paused: audio.paused } : null;
+  const front = decks?.[active];
+  if (!front || front.loadedTrackId !== nowPlaying.videoId) {
+    return { sec: pendingStartSec, paused: true };
+  }
+  return { sec: front.audio.currentTime, paused: front.audio.paused };
 }
 
 export function getAudioContextSampleRate(): number | null {
@@ -468,10 +518,12 @@ export function handleNativeTrackEnded(trackId: string): void {
 export function syncNativePlayheadFromSnapshot(snap: NativePlaybackSnapshot): void {
   const state = usePlayer.getState();
   if (!state.nativeActive || !snap.active) return;
+  if (snap.trackId && state.nowPlaying && snap.trackId !== state.nowPlaying.videoId) return;
   usePlayer.setState({
     bitPerfectStatus: snap.bitPerfect,
     desktopOutputMode: snap.settings.outputMode,
     nativePlayhead: {
+      trackId: snap.trackId ?? state.nowPlaying?.videoId ?? null,
       positionSec: snap.positionSec,
       durationSec: snap.durationSec,
       playbackRate: isBitPerfectBypassActive(snap.settings, snap.bitPerfect) ? 1 : snap.playbackRate,
@@ -523,14 +575,20 @@ function getDecks(): Promise<Deck[]> {
       // is fetched with CORS (prompt §6, the Web Audio caveat).
       audio.crossOrigin = 'anonymous';
       const engine = new YouTubeEngine(audio);
-      const deck: Deck = { engine, audio, gain: 1 };
+      const deck: Deck = {
+        engine,
+        audio,
+        gain: 1,
+        loadedTrackId: null,
+        directUrlActive: false,
+      };
       engine.onFatal = (videoId, message) => {
-        if (decks?.[active] !== deck) return;
+        if (decks?.[active] !== deck || deck.loadedTrackId !== videoId) return;
         trackLog.e(`stopped: ${message}`, videoId);
         usePlayer.setState({ status: 'error', error: message });
       };
       engine.onRecovered = (track) => {
-        if (decks?.[active] !== deck) return;
+        if (decks?.[active] !== deck || deck.loadedTrackId !== track.videoId) return;
         // Keep YouTube Music's title and artist: without the queue's track the
         // video's own ("Doja Cat - Woman" by "dojacatVEVO") would replace them.
         const { queue, index } = usePlayer.getState();
@@ -602,9 +660,12 @@ function ensureAutomix(): Promise<AutomixGraph | null> {
         loadBack: async (videoId) => {
           const back = all[1 - active]!;
           back.gain = 1;
+          back.directUrlActive = false;
+          back.loadedTrackId = null;
           applyVolumes();
           try {
             const track = await back.engine.load(videoId, { autoplay: false });
+            back.loadedTrackId = videoId;
             mixLoaded = { videoId, track };
             return true;
           } catch (error) {
@@ -685,6 +746,7 @@ function automixHandoff() {
     return;
   }
   active = 1 - active;
+  decks[active]!.loadedTrackId = entry.track.videoId;
   usePlayer.setState((s) => ({ queue: plan.queue, index: plan.index, deck: s.deck + 1, status: 'playing' }));
   applyTrack(loaded.track, entry.track);
   afterTrackStarted();
@@ -926,10 +988,12 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
       const durSec = nativePlayhead?.durationSec ?? nowPlaying.durationSec;
       const activeRate = bitPerfectBypassActive() ? 1 : get().playbackRate;
       if (status === 'playing') {
+        cancelQualityUpgrade();
         void desktopApi.audioPause().catch(() => {});
         set({
           status: 'paused',
           nativePlayhead: {
+            trackId: nowPlaying.videoId,
             positionSec: currentSec,
             durationSec: durSec,
             playbackRate: activeRate,
@@ -942,6 +1006,7 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
         set({
           status: 'playing',
           nativePlayhead: {
+            trackId: nowPlaying.videoId,
             positionSec: currentSec,
             durationSec: durSec,
             playbackRate: activeRate,
@@ -969,6 +1034,7 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
       // In a party, a resume waits for the instant the server schedules for everyone.
       if (!partyHooks?.shouldDeferPlay()) void audio.play().catch((e: unknown) => trackLog.w(`play() refused: ${String(e)}`));
     } else {
+      cancelQualityUpgrade();
       cancelCrossfade();
       audio.pause();
       graph?.tap?.flush();
@@ -986,11 +1052,13 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
       return;
     }
     if (nativeActive) {
+      cancelQualityUpgrade();
       const dur = nativePlayhead?.durationSec ?? nowPlaying?.durationSec ?? seconds;
       const clamped = Math.max(0, Math.min(seconds, dur || seconds));
       void desktopApi.audioSeek(clamped).catch(() => {});
       set({
         nativePlayhead: {
+          trackId: nowPlaying?.videoId ?? nativePlayhead?.trackId ?? null,
           positionSec: clamped,
           durationSec: dur,
           playbackRate: bitPerfectBypassActive() ? 1 : get().playbackRate,
@@ -1003,6 +1071,7 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
     }
     const audio = getAudio();
     if (!audio) return;
+    cancelQualityUpgrade();
     cancelCrossfade();
     audio.currentTime = Math.max(0, Math.min(seconds, audio.duration || seconds));
     graph?.tap?.flush();
@@ -1239,12 +1308,12 @@ function insertUser(tracks: Track[], source: QueueSource | null, isNext: boolean
 
 /** Stops any local audio deck or WASAPI stream before transferring playback to a TV. */
 export async function silenceLocalOutputForCast(): Promise<void> {
+  cancelQualityUpgrade();
   cancelCrossfade();
   graph?.dj.stop();
   if (decks) {
     for (const d of decks) {
-      void d.engine.stop().catch(() => {});
-      d.audio.pause();
+      silenceDeck(d);
     }
   }
   if (graph?.tap?.isEnabled) {
@@ -1252,6 +1321,23 @@ export async function silenceLocalOutputForCast(): Promise<void> {
   }
   if (usePlayer.getState().nativeActive) {
     await desktopApi.audioStop().catch(() => {});
+    usePlayer.setState({
+      nativeActive: false,
+      nativePlayhead: null,
+      bitPerfectStatus: null,
+    });
+  }
+}
+
+function silenceLocalAudioImmediate(): void {
+  if (decks) {
+    for (const d of decks) {
+      silenceDeck(d);
+    }
+  }
+  graph?.tap?.flush();
+  if (isTauriDesktop() && usePlayer.getState().nativeActive) {
+    void desktopApi.audioStop().catch(() => {});
     usePlayer.setState({
       nativeActive: false,
       nativePlayhead: null,
@@ -1274,6 +1360,74 @@ export function handleCastTrackEnded(trackId: string): void {
   void advance(true).then(intent);
 }
 
+const FAST_SOURCE_RACE_MS = 2500;
+const DIRECT_SOURCE_WAIT_MS = 12_000;
+const BACKGROUND_SOURCE_LOOKUP_MS = 25_000;
+const MIN_REMAINING_FOR_UPGRADE_SEC = 20;
+const UPGRADE_MICRO_FADE_MS = 80;
+const UPGRADE_STEP_MS = 20;
+const UPGRADE_PREBUFFER_TIMEOUT_MS = 12_000;
+
+function formatReplacementMeta(replacement: ResolvedPlaybackSource) {
+  const { payload } = replacement;
+  const streamMeta = payload.stream;
+  const codecLabel =
+    streamMeta.codec ??
+    streamMeta.format?.toUpperCase() ??
+    (streamMeta.lossless ? 'FLAC' : 'Audio');
+  const detailParts = [codecLabel];
+  if (streamMeta.bitrateKbps) detailParts.push(`${streamMeta.bitrateKbps} kbps`);
+  else if (streamMeta.sampleRateHz) detailParts.push(`${+(streamMeta.sampleRateHz / 1000).toFixed(1)} kHz`);
+  detailParts.push(`via ${streamMeta.sourceName}`);
+  const streamStats: StreamStats & { client: string } = {
+    codec: codecLabel,
+    itag: null,
+    bitrateKbps: streamMeta.bitrateKbps,
+    sampleRateHz: streamMeta.sampleRateHz,
+    channels: 2,
+    mode: 'direct',
+    client: streamMeta.sourceName,
+  };
+  return {
+    payload,
+    streamMeta,
+    codecLabel,
+    streamInfo: detailParts.join(' · '),
+    streamStats,
+  };
+}
+
+function waitForAudioReady(
+  audio: HTMLAudioElement,
+  eventName: 'loadedmetadata' | 'canplay',
+  isAlreadyReady: () => boolean,
+  timeoutMs: number,
+  onRegisterAbort: (abort: () => void) => void,
+): Promise<void> {
+  if (isAlreadyReady()) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      audio.removeEventListener(eventName, onReady);
+      audio.removeEventListener('error', onError);
+    };
+    const finish = (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (err) reject(err);
+      else resolve();
+    };
+    const onReady = () => finish();
+    const onError = () => finish(new Error('Replacement stream failed to load'));
+    const timer = window.setTimeout(() => finish(new Error('Replacement stream prebuffer timed out')), timeoutMs);
+    audio.addEventListener(eventName, onReady, { once: true });
+    audio.addEventListener('error', onError, { once: true });
+    onRegisterAbort(() => finish(new Error('SupersededError')));
+  });
+}
+
 async function beginNativeTrackPlayback(params: {
   entry: QueueEntry;
   token: number;
@@ -1287,18 +1441,20 @@ async function beginNativeTrackPlayback(params: {
   const { entry, token, startSec, autoplay, playNative, codecHint, bitrateKbps, sourceLabel } = params;
   if (decks) {
     for (const d of decks) {
-      void d.engine.stop().catch(() => {});
-      d.audio.pause();
+      silenceDeck(d);
     }
   }
   if (graph?.tap?.isEnabled) {
     await graph.tap.setRouting(false);
   }
+  if (token !== loadToken) return;
   const curState = usePlayer.getState();
   await desktopApi.audioSetVolume(curState.volume, curState.muted).catch(() => {});
   const played = await playNative();
-  if (token !== loadToken) return;
-  if (startSec > 0) await desktopApi.audioSeek(startSec).catch(() => {});
+  if (token !== loadToken) {
+    void desktopApi.audioStop().catch(() => {});
+    return;
+  }
   if (!autoplay) await desktopApi.audioPause().catch(() => {});
   queryClient.setQueryData(['desktop', 'audio', 'snapshot'], played);
   const dur = played.durationSec || entry.track.durationSec || 0;
@@ -1310,6 +1466,7 @@ async function beginNativeTrackPlayback(params: {
   usePlayer.setState({
     nativeActive: true,
     nativePlayhead: {
+      trackId: entry.track.videoId,
       positionSec: startSec,
       durationSec: dur,
       playbackRate: effectiveRate,
@@ -1354,12 +1511,29 @@ async function beginAudioElementPlayback(params: {
   streamStats: (StreamStats & { client: string }) | null;
 }): Promise<void> {
   const { deck, entry, url, token, startSec, autoplay, settings, streamInfo, streamStats } = params;
+  if (token !== loadToken) return;
+  deck.loadedTrackId = null;
   await deck.engine.stop().catch(() => {});
+  if (token !== loadToken) return;
+  deck.directUrlActive = true;
   deck.audio.src = url;
   applyEffectivePlaybackRate(settings);
   if (startSec > 0) deck.audio.currentTime = startSec;
-  if (autoplay) await deck.audio.play();
-  if (token !== loadToken) return;
+  if (autoplay) {
+    try {
+      await deck.audio.play();
+    } catch (err) {
+      if (token !== loadToken) {
+        silenceDeck(deck);
+      }
+      throw err;
+    }
+  }
+  if (token !== loadToken) {
+    silenceDeck(deck);
+    return;
+  }
+  deck.loadedTrackId = entry.track.videoId;
   const dur = Number.isFinite(deck.audio.duration) ? deck.audio.duration : (entry.track.durationSec ?? 0);
   usePlayer.setState({
     nowPlaying: {
@@ -1375,16 +1549,337 @@ async function beginAudioElementPlayback(params: {
   syncAutomix(settings);
 }
 
+async function tryPlayResolvedReplacement(params: {
+  deck: Deck;
+  entry: QueueEntry;
+  replacement: ResolvedPlaybackSource;
+  token: number;
+  startSec: number;
+  autoplay: boolean;
+  exclusive: boolean;
+  settings: AudioSettings | null;
+}): Promise<boolean> {
+  const { deck, entry, replacement, token, startSec, autoplay, exclusive, settings } = params;
+  const trackId = entry.track.videoId;
+  const { payload, streamMeta, codecLabel, streamInfo, streamStats } = formatReplacementMeta(replacement);
+
+  if (exclusive) {
+    try {
+      await beginNativeTrackPlayback({
+        entry,
+        token,
+        startSec,
+        autoplay,
+        codecHint: codecLabel,
+        bitrateKbps: streamMeta.bitrateKbps,
+        sourceLabel: streamMeta.sourceName,
+        playNative: () =>
+          desktopApi.audioPlayRemoteSource(
+            trackId,
+            payload.proxyKey,
+            extensionForResolvedStream(payload),
+            startSec,
+          ),
+      });
+      return true;
+    } catch (err) {
+      if (token !== loadToken) return true;
+      trackLog.w(
+        `Native decode failed for ${streamMeta.sourceName}, falling back: ${err instanceof Error ? err.message : String(err)}`,
+        trackId,
+      );
+    }
+  }
+
+  try {
+    await beginAudioElementPlayback({
+      deck,
+      entry,
+      url: payload.proxyUrl,
+      token,
+      startSec,
+      autoplay,
+      settings,
+      streamInfo,
+      streamStats,
+    });
+    return true;
+  } catch (err) {
+    if (token !== loadToken) return true;
+    silenceDeck(deck);
+    trackLog.w(
+      `Source playback failed for ${streamMeta.sourceName}, falling back to YouTube Music: ${err instanceof Error ? err.message : String(err)}`,
+      trackId,
+    );
+    return false;
+  }
+}
+
+async function upgradeActiveTrackToSource(params: {
+  entry: QueueEntry;
+  token: number;
+  replacement: ResolvedPlaybackSource;
+  settings: AudioSettings | null;
+}): Promise<void> {
+  const { entry, token, replacement, settings } = params;
+  const trackId = entry.track.videoId;
+  if (token !== loadToken) return;
+
+  const canStillUpgrade = () => {
+    if (token !== loadToken) return false;
+    const s = usePlayer.getState();
+    if (s.nowPlaying?.videoId !== trackId) return false;
+    if (s.status !== 'playing' && s.status !== 'buffering') return false;
+    if (s.mixing || holding || fade || castHooks?.isConnected()) return false;
+    const head = getPlayhead();
+    const curSec = head?.sec ?? 0;
+    const durSec = s.nowPlaying.durationSec || decks?.[active]?.audio.duration || 0;
+    if (durSec > 0 && durSec - curSec < MIN_REMAINING_FOR_UPGRADE_SEC) return false;
+    return true;
+  };
+
+  if (!canStillUpgrade()) return;
+
+  const { payload, streamMeta, codecLabel, streamInfo, streamStats } = formatReplacementMeta(replacement);
+  const exclusive = isExclusiveOutputMode(settings?.outputMode);
+
+  if (exclusive) {
+    try {
+      const initialSec = getPlayhead()?.sec ?? 0;
+      const played = await desktopApi.audioPlayRemoteSource(
+        trackId,
+        payload.proxyKey,
+        extensionForResolvedStream(payload),
+        initialSec,
+      );
+      if (!canStillUpgrade()) {
+        void desktopApi.audioStop().catch(() => {});
+        return;
+      }
+      const syncedSec = decks?.[active]?.audio.currentTime ?? (getPlayhead()?.sec ?? initialSec);
+      if (syncedSec > 0) {
+        await desktopApi.audioSeek(syncedSec).catch(() => {});
+      }
+      if (decks) {
+        for (const d of decks) silenceDeck(d);
+      }
+      if (graph?.tap?.isEnabled) {
+        await graph.tap.setRouting(false).catch(() => {});
+      }
+      queryClient.setQueryData(['desktop', 'audio', 'snapshot'], played);
+      const dur = played.durationSec || usePlayer.getState().nowPlaying?.durationSec || entry.track.durationSec || 0;
+      const effectiveRate = isBitPerfectBypassActive(played.settings, played.bitPerfect) ? 1 : played.playbackRate;
+      const driverLabel = played.bitPerfect.exact
+        ? 'WASAPI Bit-Exact'
+        : (played.bitPerfect.driver ?? 'WASAPI Exclusive');
+      usePlayer.setState((s) => ({
+        nativeActive: true,
+        nativePlayhead: {
+          trackId,
+          positionSec: syncedSec,
+          durationSec: dur,
+          playbackRate: effectiveRate,
+          updatedAtMs: performance.now(),
+          paused: false,
+        },
+        desktopOutputMode: played.settings.outputMode,
+        bitPerfectStatus: played.bitPerfect,
+        nowPlaying: s.nowPlaying
+          ? {
+              ...s.nowPlaying,
+              durationSec: dur,
+              streamInfo: `${codecLabel} · ${driverLabel} via ${streamMeta.sourceName}`,
+              stream: {
+                codec: codecLabel,
+                itag: null,
+                bitrateKbps: streamMeta.bitrateKbps ?? null,
+                sampleRateHz: played.sampleRateHz,
+                channels: played.channels,
+                mode: 'direct',
+                client: `${streamMeta.sourceName} (${driverLabel})`,
+              },
+            }
+          : s.nowPlaying,
+        status: 'playing',
+      }));
+      applyVolumes();
+    } catch (err) {
+      if (token === loadToken) {
+        trackLog.w(
+          `Background native upgrade skipped for ${streamMeta.sourceName}: ${err instanceof Error ? err.message : String(err)}`,
+          trackId,
+        );
+      }
+    }
+    return;
+  }
+
+  const all = await getDecks();
+  if (!canStillUpgrade()) return;
+
+  const frontIndex = active;
+  const backIndex = 1 - frontIndex;
+  const front = all[frontIndex]!;
+  const back = all[backIndex]!;
+
+  let rampTimer = 0;
+  let eventAbort: (() => void) | null = null;
+  let aborted = false;
+
+  const abortUpgrade = () => {
+    aborted = true;
+    if (rampTimer) {
+      window.clearTimeout(rampTimer);
+      rampTimer = 0;
+    }
+    eventAbort?.();
+    if (active === frontIndex) {
+      silenceDeck(back);
+      back.gain = 1;
+      front.gain = 1;
+      applyVolumes();
+    }
+  };
+  activeUpgradeCancel = abortUpgrade;
+
+  try {
+    silenceDeck(back);
+    back.gain = 0;
+    if (graph) {
+      graph.decks[backIndex]?.fader.gain.setValueAtTime(0, graph.ctx.currentTime);
+    } else {
+      back.audio.volume = 0;
+    }
+    back.directUrlActive = true;
+    back.audio.src = payload.proxyUrl;
+    applyEffectivePlaybackRate(settings);
+
+    await waitForAudioReady(
+      back.audio,
+      'loadedmetadata',
+      () => back.audio.readyState >= 1,
+      UPGRADE_PREBUFFER_TIMEOUT_MS,
+      (fn) => {
+        eventAbort = fn;
+      },
+    );
+    if (aborted || !canStillUpgrade()) {
+      abortUpgrade();
+      return;
+    }
+
+    const expectedDur = usePlayer.getState().nowPlaying?.durationSec || front.audio.duration || 0;
+    if (Number.isFinite(back.audio.duration) && back.audio.duration > 0 && expectedDur > 0) {
+      const maxDrift = Math.max(useSources.getState().trackLengthToleranceSec, 5);
+      if (Math.abs(back.audio.duration - expectedDur) > maxDrift) {
+        trackLog.w(
+          `Upgrade rejected: decoded duration ${Math.round(back.audio.duration)}s differs from ${Math.round(expectedDur)}s`,
+          trackId,
+        );
+        abortUpgrade();
+        return;
+      }
+    }
+
+    back.audio.currentTime = front.audio.currentTime;
+    await waitForAudioReady(
+      back.audio,
+      'canplay',
+      () => back.audio.readyState >= 3,
+      UPGRADE_PREBUFFER_TIMEOUT_MS,
+      (fn) => {
+        eventAbort = fn;
+      },
+    );
+    if (aborted || !canStillUpgrade()) {
+      abortUpgrade();
+      return;
+    }
+
+    back.audio.currentTime = front.audio.currentTime;
+    await back.audio.play();
+    if (aborted || !canStillUpgrade()) {
+      abortUpgrade();
+      return;
+    }
+
+    if (Math.abs(back.audio.currentTime - front.audio.currentTime) > 0.045) {
+      back.audio.currentTime = front.audio.currentTime;
+    }
+
+    back.loadedTrackId = trackId;
+    active = backIndex;
+    const verifiedDur = Number.isFinite(back.audio.duration) && back.audio.duration > 0
+      ? back.audio.duration
+      : expectedDur;
+
+    usePlayer.setState((s) => ({
+      deck: s.deck + 1,
+      status: 'playing',
+      nowPlaying: s.nowPlaying
+        ? {
+            ...s.nowPlaying,
+            durationSec: verifiedDur || s.nowPlaying.durationSec,
+            streamInfo,
+            stream: streamStats,
+          }
+        : s.nowPlaying,
+    }));
+
+    const fadeStarted = performance.now();
+    await new Promise<void>((resolve) => {
+      const step = () => {
+        if (aborted || token !== loadToken) {
+          resolve();
+          return;
+        }
+        const t = Math.min(1, (performance.now() - fadeStarted) / UPGRADE_MICRO_FADE_MS);
+        front.gain = Math.cos((t * Math.PI) / 2);
+        back.gain = Math.sin((t * Math.PI) / 2);
+        applyVolumes();
+        if (t < 1) {
+          rampTimer = window.setTimeout(step, UPGRADE_STEP_MS);
+        } else {
+          rampTimer = 0;
+          back.gain = 1;
+          front.gain = 1;
+          silenceDeck(front);
+          applyVolumes();
+          resolve();
+        }
+      };
+      step();
+    });
+    trackLog.i(`upgraded active stream to ${streamInfo}`, trackId);
+  } catch (err) {
+    if (!aborted && token === loadToken) {
+      trackLog.w(
+        `Background upgrade failed for ${streamMeta.sourceName}: ${err instanceof Error ? err.message : String(err)}`,
+        trackId,
+      );
+    }
+    abortUpgrade();
+  } finally {
+    if (activeUpgradeCancel === abortUpgrade) {
+      activeUpgradeCancel = null;
+    }
+  }
+}
+
 /** Loads queue[at] into the deck in front and plays it. `auto` marks a move the player made on its own. */
 async function startAt(at: number, { startSec = 0, auto = false, autoplay = true } = {}): Promise<void> {
   const state = usePlayer.getState();
   const entry = state.queue[at];
   if (!entry) return;
+  cancelQualityUpgrade();
   cancelCrossfade();
   const token = ++loadToken;
+  pendingStartSec = startSec;
   const trackId = entry.track.videoId;
   const isRemoteFile = trackId.startsWith('webdav:') || trackId.startsWith('smb:');
   const isDirectLibrary = trackId.startsWith('local:') || isRemoteFile;
+
+  silenceLocalAudioImmediate();
 
   if (castHooks?.isConnected()) {
     usePlayer.setState({ index: at, nowPlaying: hintOf(entry.track), status: 'loading', error: null });
@@ -1420,23 +1915,26 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
   updateMediaSession(usePlayer.getState().nowPlaying);
   try {
     const settings = await resolveDesktopAudioSettings();
+    if (token !== loadToken) return;
     const exclusive = isExclusiveOutputMode(settings?.outputMode);
 
     if (isTauriDesktop() && trackId.startsWith('local:') && exclusive) {
       let localMeta = localTrackMeta.get(trackId);
       if (!localMeta) {
         const scanned = await desktopApi.localListTracks().catch(() => []);
+        if (token !== loadToken) return;
         usePlayer.getState().registerLocalTracks(scanned);
         localMeta = localTrackMeta.get(trackId);
       }
       if (localMeta) {
+        const meta = localMeta;
         await beginNativeTrackPlayback({
           entry,
           token,
           startSec,
           autoplay,
-          codecHint: localMeta.codec,
-          playNative: () => desktopApi.audioPlayFile(trackId, localMeta.filePath),
+          codecHint: meta.codec,
+          playNative: () => desktopApi.audioPlayFile(trackId, meta.filePath, startSec),
         });
         return;
       }
@@ -1448,6 +1946,7 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
         const list = trackId.startsWith('webdav:')
           ? await desktopApi.webdavListTracks().catch(() => [])
           : await desktopApi.smbListTracks().catch(() => []);
+        if (token !== loadToken) return;
         usePlayer.getState().registerRemoteTracks(list);
         rMeta = remoteTrackMeta.get(trackId);
       }
@@ -1458,27 +1957,25 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
             : 'This SMB file is unavailable. Check SMB under Settings -> Sources.',
         );
       }
-      const sourceLabel = rMeta.sourceKind === 'webdav' ? 'WebDAV' : 'SMB';
+      const meta = rMeta;
+      const sourceLabel = meta.sourceKind === 'webdav' ? 'WebDAV' : 'SMB';
       if (exclusive) {
         await beginNativeTrackPlayback({
           entry,
           token,
           startSec,
           autoplay,
-          codecHint: rMeta.codec,
+          codecHint: meta.codec,
           sourceLabel,
           playNative: () =>
-            desktopApi.audioPlayRemoteSource(trackId, rMeta.proxyKey, extensionFromName(rMeta.fileName)),
+            desktopApi.audioPlayRemoteSource(trackId, meta.proxyKey, extensionFromName(meta.fileName), startSec),
         });
         return;
       }
-      if (usePlayer.getState().nativeActive) {
-        await desktopApi.audioStop().catch(() => {});
-        usePlayer.setState({ nativeActive: false, nativePlayhead: null, bitPerfectStatus: null });
-      }
       const all = await getDecks();
+      if (token !== loadToken) return;
       const deck = all[active]!;
-      all[1 - active]!.engine.stop().catch(() => {});
+      silenceDeck(all[1 - active]!);
       deck.gain = 1;
       applyVolumes();
       applyEffectivePlaybackRate(settings);
@@ -1490,14 +1987,14 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
       await beginAudioElementPlayback({
         deck,
         entry,
-        url: rMeta.proxyUrl,
+        url: meta.proxyUrl,
         token,
         startSec,
         autoplay,
         settings,
-        streamInfo: `${rMeta.codec} · ${sourceLabel}`,
+        streamInfo: `${meta.codec} · ${sourceLabel}`,
         streamStats: {
-          codec: rMeta.codec,
+          codec: meta.codec,
           itag: null,
           bitrateKbps: null,
           sampleRateHz: null,
@@ -1509,18 +2006,10 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
       return;
     }
 
-    if (usePlayer.getState().nativeActive) {
-      await desktopApi.audioStop().catch(() => {});
-      usePlayer.setState({
-        nativeActive: false,
-        nativePlayhead: null,
-        bitPerfectStatus: null,
-      });
-    }
-
     const all = await getDecks();
+    if (token !== loadToken) return;
     const deck = all[active]!;
-    all[1 - active]!.engine.stop().catch(() => {});
+    silenceDeck(all[1 - active]!);
     deck.gain = 1;
     applyVolumes();
     applyEffectivePlaybackRate(settings);
@@ -1538,6 +2027,7 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
       } else {
         localMediaUrl = await desktopApi.downloadsMediaUrl(trackId).catch(() => null);
       }
+      if (token !== loadToken) return;
     }
 
     if (localMediaUrl) {
@@ -1555,80 +2045,74 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
       return;
     }
 
-    // Attempt higher-priority configured sources (HTTP Addons -> JioSaavn) when Direct Source Stream is enabled.
     const { directSourceStream, streamingQuality } = usePlayer.getState();
-    if (isTauriDesktop() && directSourceStream && !isDirectLibrary) {
-      const replacement = await resolveReplacementSource(entry.track, {
+    let backgroundLookup: Promise<ResolvedPlaybackSource | null> | null = null;
+
+    if (isTauriDesktop() && !isDirectLibrary) {
+      if (!useSources.getState().loaded) {
+        await useSources.getState().loadFromBackend().catch(() => {});
+        if (token !== loadToken) return;
+      }
+      const baseResolveOpts: ReplacementResolveOptions = {
         streamingQuality,
         outputMode: settings?.outputMode ?? 'shared',
         activeDevice: getActiveOutputDevice(settings ?? null),
-      }).catch(() => null);
-      if (token !== loadToken) return;
+        shouldCancel: () => token !== loadToken,
+      };
+      const hasSources = listEligibleSourceIds(baseResolveOpts).length > 0;
 
-      if (replacement) {
-        const { payload } = replacement;
-        const streamMeta = payload.stream;
-        const codecLabel =
-          streamMeta.codec ??
-          streamMeta.format?.toUpperCase() ??
-          (streamMeta.lossless ? 'FLAC' : 'Audio');
-
-        if (exclusive) {
-          try {
-            await beginNativeTrackPlayback({
-              entry,
-              token,
-              startSec,
-              autoplay,
-              codecHint: codecLabel,
-              bitrateKbps: streamMeta.bitrateKbps,
-              sourceLabel: streamMeta.sourceName,
-              playNative: () =>
-                desktopApi.audioPlayRemoteSource(
-                  trackId,
-                  payload.proxyKey,
-                  extensionForResolvedStream(payload),
-                ),
-            });
-            return;
-          } catch (err) {
-            trackLog.w(
-              `Native decode failed for ${streamMeta.sourceName}, falling back: ${err instanceof Error ? err.message : String(err)}`,
-              trackId,
-            );
-          }
-        }
-
-        try {
-          const detailParts = [codecLabel];
-          if (streamMeta.bitrateKbps) detailParts.push(`${streamMeta.bitrateKbps} kbps`);
-          else if (streamMeta.sampleRateHz) detailParts.push(`${+(streamMeta.sampleRateHz / 1000).toFixed(1)} kHz`);
-          detailParts.push(`via ${streamMeta.sourceName}`);
-          await beginAudioElementPlayback({
+      if (hasSources && directSourceStream) {
+        const replacement = await resolveReplacementSource(entry.track, {
+          ...baseResolveOpts,
+          maxQueriesPerSource: 2,
+          timeoutMs: DIRECT_SOURCE_WAIT_MS,
+        });
+        if (token !== loadToken) return;
+        if (replacement) {
+          const started = await tryPlayResolvedReplacement({
             deck,
             entry,
-            url: payload.proxyUrl,
+            replacement,
             token,
             startSec,
             autoplay,
+            exclusive,
             settings,
-            streamInfo: detailParts.join(' · '),
-            streamStats: {
-              codec: codecLabel,
-              itag: null,
-              bitrateKbps: streamMeta.bitrateKbps,
-              sampleRateHz: streamMeta.sampleRateHz,
-              channels: 2,
-              mode: 'direct',
-              client: streamMeta.sourceName,
-            },
           });
-          return;
-        } catch (err) {
-          trackLog.w(
-            `Source playback failed for ${streamMeta.sourceName}, falling back to YouTube Music: ${err instanceof Error ? err.message : String(err)}`,
-            trackId,
-          );
+          if (started) return;
+        }
+      } else if (hasSources) {
+        const inFlight = resolveReplacementSource(entry.track, {
+          ...baseResolveOpts,
+          maxQueriesPerSource: 2,
+          timeoutMs: BACKGROUND_SOURCE_LOOKUP_MS,
+        });
+        let raceTimer = 0;
+        const raceOutcome = await Promise.race([
+          inFlight.then((res) => ({ kind: 'resolved' as const, res })),
+          new Promise<{ kind: 'timeout' }>((resolve) => {
+            raceTimer = window.setTimeout(() => resolve({ kind: 'timeout' }), FAST_SOURCE_RACE_MS);
+          }),
+        ]);
+        window.clearTimeout(raceTimer);
+        if (token !== loadToken) return;
+
+        if (raceOutcome.kind === 'resolved') {
+          if (raceOutcome.res) {
+            const started = await tryPlayResolvedReplacement({
+              deck,
+              entry,
+              replacement: raceOutcome.res,
+              token,
+              startSec,
+              autoplay,
+              exclusive,
+              settings,
+            });
+            if (started) return;
+          }
+        } else {
+          backgroundLookup = inFlight;
         }
       }
     }
@@ -1643,13 +2127,27 @@ async function startAt(at: number, { startSec = 0, auto = false, autoplay = true
       return;
     }
 
+    deck.directUrlActive = false;
+    deck.loadedTrackId = null;
     const track = await deck.engine.load(trackId, { startSec, autoplay });
-    if (token !== loadToken) return;
+    if (token !== loadToken) {
+      silenceDeck(deck);
+      return;
+    }
+    deck.loadedTrackId = trackId;
     applyEffectivePlaybackRate(settings);
     applyTrack(track, entry.track);
-    if (!autoplay) usePlayer.setState({ status: 'paused' });
+    usePlayer.setState({ status: autoplay ? 'playing' : 'paused' });
     afterTrackStarted();
     syncAutomix(settings);
+
+    if (backgroundLookup && autoplay) {
+      void backgroundLookup.then((replacement) => {
+        if (replacement && token === loadToken) {
+          void upgradeActiveTrackToSource({ entry, token, replacement, settings });
+        }
+      });
+    }
   } catch (error) {
     if (token !== loadToken || (error instanceof Error && error.name === 'SupersededError')) return;
     const message = error instanceof Error ? error.message : String(error);
@@ -1838,7 +2336,7 @@ function cancelCrossfade() {
   if (graph && (graph.dj.mixing || mixLoaded)) {
     mixLoaded = null;
     graph.dj.cancel();
-    if (decks) void decks[1 - active]!.engine.stop().catch(() => {});
+    if (decks) silenceDeck(decks[1 - active]!);
   } else graph?.dj.cancel();
   if (!fade) return;
   clearTimeout(fade.frame);
@@ -1846,7 +2344,7 @@ function cancelCrossfade() {
   fade = null;
   if (!decks) return;
   // Whichever deck isn't in front stops; the one in front plays on at full volume.
-  void decks[1 - active]!.engine.stop().catch(() => {});
+  silenceDeck(decks[1 - active]!);
   decks[active]!.gain = 1;
   applyVolumes();
   if (wasPending) loadToken++;
@@ -1858,6 +2356,7 @@ function maybeCrossfade() {
   if (
     !decks ||
     fade ||
+    activeUpgradeCancel ||
     state.automix ||
     !state.crossfadeSec ||
     state.status !== 'playing' ||
@@ -1875,6 +2374,8 @@ function maybeCrossfade() {
   const entry = plan.queue[plan.index]!;
   const token = ++loadToken;
   fade = { token, frame: 0, pending: true };
+  back.loadedTrackId = null;
+  back.directUrlActive = false;
   back.gain = 0;
   applyVolumes();
   trackLog.i(`crossfading into the next track over ${Math.round(remaining)}s`, entry.track.videoId);
@@ -1882,10 +2383,14 @@ function maybeCrossfade() {
   back.engine
     .load(entry.track.videoId, { autoplay: true })
     .then((track) => {
-      if (!fade || fade.token !== token || !decks) return;
+      if (!fade || fade.token !== token || !decks) {
+        silenceDeck(back);
+        return;
+      }
       fade.pending = false;
       const from = front;
       const to = back;
+      to.loadedTrackId = entry.track.videoId;
       // The new track is the one playing now, as far as everything else knows.
       active = 1 - active;
       usePlayer.setState((s) => ({ queue: plan.queue, index: plan.index, deck: s.deck + 1, status: 'playing' }));
@@ -1906,7 +2411,7 @@ function maybeCrossfade() {
           fade = null;
           to.gain = 1;
           from.gain = 1;
-          void from.engine.stop().catch(() => {});
+          silenceDeck(from);
           applyVolumes();
         }
       };
@@ -1917,7 +2422,7 @@ function maybeCrossfade() {
       trackLog.w(`crossfade load failed: ${String(error)}; the next track starts when this one ends`, entry.track.videoId);
       fade = null;
       back.gain = 1;
-      void back.engine.stop().catch(() => {});
+      silenceDeck(back);
       applyVolumes();
       // If the track in front already ended while this loaded, move on now.
       if (front.audio.ended) void advance(true);
@@ -1955,13 +2460,21 @@ export function onTrackEnded(listener: () => void): () => void {
   return () => endedListeners.delete(listener);
 }
 
-/** The elements' own events are the source of truth for play state; only the deck in front speaks. */
+/** The elements' own events are the source of truth for play state; only the deck owning the active track speaks. */
 function bindElement(deck: Deck, n: number) {
   const element = deck.audio;
   const inFront = () => active === n;
+  const ownsActiveTrack = () => {
+    if (!inFront()) return false;
+    if (holding) return true;
+    const currentVideoId = usePlayer.getState().nowPlaying?.videoId ?? null;
+    return currentVideoId !== null && deck.loadedTrackId === currentVideoId;
+  };
   const set = (status: PlayerStatus) => {
-    if (!inFront() || holding) return;
-    if (usePlayer.getState().status === 'error' && status !== 'playing') return;
+    if (!ownsActiveTrack() || holding) return;
+    const curStatus = usePlayer.getState().status;
+    if (curStatus === 'loading') return;
+    if (curStatus === 'error' && status !== 'playing') return;
     usePlayer.setState({ status });
   };
   element.addEventListener('playing', () => set('playing'));
@@ -1970,33 +2483,27 @@ function bindElement(deck: Deck, n: number) {
   });
   element.addEventListener('waiting', () => set('buffering'));
   element.addEventListener('ended', () => {
-    if (!inFront() || holding) return;
+    if (!ownsActiveTrack() || holding) return;
     endedListeners.forEach((listener) => listener());
-    // The track ran out before the crossfade's next one could start: give up
-    // on the fade and play the next track here. Waiting on it was silence for
-    // as long as that load took, which on a slow or failing load (each client
-    // gets 15 s for first audio) came to half a minute.
     if (fade?.pending) cancelCrossfade();
-    // AutoMix's outgoing track ran out before the blend's midpoint (a stall): the incoming one is already playing.
     if (graph?.dj.forceHandoff()) return;
-    // The queue moving on by itself is the user's intent, as far as a party is concerned.
     void advance(true).then(intent);
   });
   element.addEventListener('timeupdate', () => {
-    if (!inFront()) return;
+    if (!ownsActiveTrack()) return;
     maybeCrossfade();
     ensureAutoplay();
   });
   for (const event of ['durationchange', 'ratechange', 'seeked'] as const) {
     element.addEventListener(event, () => {
-      if (inFront()) updatePositionState();
+      if (ownsActiveTrack()) updatePositionState();
     });
   }
   element.addEventListener('play', () => {
-    if (inFront() && 'mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+    if (ownsActiveTrack() && 'mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
   });
   element.addEventListener('pause', () => {
-    if (inFront() && 'mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+    if (ownsActiveTrack() && 'mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
   });
 }
 

@@ -482,10 +482,13 @@ pub async fn audio_update_settings(
 pub async fn audio_play_file(
     track_id: String,
     file_path: String,
+    start_sec: Option<f64>,
     state: State<'_, AppState>,
 ) -> Result<NativePlaybackSnapshot, String> {
     let playback = state.playback.clone();
-    run_blocking(move || playback.play_local_file(track_id, PathBuf::from(file_path)))
+    let seq = playback.next_request_seq();
+    let offset = start_sec.unwrap_or(0.0);
+    run_blocking(move || playback.play_local_file_guarded(track_id, PathBuf::from(file_path), offset, Some(seq)))
         .await?
         .map_err(|e| e.to_string())
 }
@@ -1025,20 +1028,29 @@ pub async fn audio_play_remote_source(
     track_id: String,
     proxy_key: String,
     ext: Option<String>,
+    start_sec: Option<f64>,
     state: State<'_, AppState>,
 ) -> Result<NativePlaybackSnapshot, String> {
     const MAX_NATIVE_REMOTE_BYTES: u64 = 256 * 1024 * 1024;
+    let seq = state.playback.next_request_seq();
+    let offset = start_sec.unwrap_or(0.0);
+
     if let Some(http_target) = state.proxy.get_http_target(&proxy_key) {
         let bytes = state
             .sources
             .fetch_http_bytes(&http_target.url, &http_target.headers)
             .await
             .map_err(|e| e.to_string())?;
+        if state.playback.current_request_seq() != seq {
+            return Err("SupersededError".to_string());
+        }
         let hint_ext = ext.or_else(|| core_sources::model::extension_lower(&http_target.url));
-        return state
-            .playback
-            .play_encoded_bytes(track_id, bytes, hint_ext.as_deref())
-            .map_err(|e| e.to_string());
+        let playback = state.playback.clone();
+        return run_blocking(move || {
+            playback.play_encoded_bytes_guarded(track_id, bytes, hint_ext.as_deref(), offset, Some(seq))
+        })
+        .await?
+        .map_err(|e| e.to_string());
     }
     if let Some(smb_target) = state.proxy.get_smb_target(&proxy_key) {
         let cfg = state
@@ -1052,11 +1064,16 @@ pub async fn audio_play_remote_source(
         )
         .await
         .map_err(|e| e.to_string())?;
+        if state.playback.current_request_seq() != seq {
+            return Err("SupersededError".to_string());
+        }
         let hint_ext = ext.or_else(|| core_sources::model::extension_lower(&smb_target.rel_path));
-        return state
-            .playback
-            .play_encoded_bytes(track_id, bytes, hint_ext.as_deref())
-            .map_err(|e| e.to_string());
+        let playback = state.playback.clone();
+        return run_blocking(move || {
+            playback.play_encoded_bytes_guarded(track_id, bytes, hint_ext.as_deref(), offset, Some(seq))
+        })
+        .await?
+        .map_err(|e| e.to_string());
     }
     Err(format!("Remote source handle '{}' expired or not found", proxy_key))
 }
