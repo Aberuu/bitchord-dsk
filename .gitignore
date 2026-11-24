@@ -21,3 +21,6 @@ BitChord-main.zip
 Thumbs.db
 Resource REA
 .Resource REA
+
+# Local Addon Tools
+tools/bitchord-flac-addon/

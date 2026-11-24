@@ -261,7 +261,7 @@ src-tauri/target/release/bundle/nsis/
 
 ### `v0.8.0-beta.808` (Current - Beta Testing)
 - **Audio & Playback:** Added Bit-Perfect bypass mode (disables Web Audio EQ & software volume for bit-exact DAC output), audio device hotplugging, audio tap worklet, and direct stream resolver.
-- **Casting & External Sources:** Added CastV2 & DLNA casting (`CastModal`), `core-sources` (WebDAV, SMB, JioSaavn, addons), and system tray close-behavior preferences.
+- **Casting & External Sources:** Added CastV2 & DLNA casting (`CastModal`), `core-sources` (WebDAV, SMB, JioSaavn, FLAC addon via `scripts/run-flac-addon.ps1`), and system tray close-behavior preferences.
 - **UI & Shell:** Added Developer Watermark, refined `TitleBar`, `AppShell`, `FullScreenPlayer`, and custom scrollbar styling.
 
 ### `v0.1.0-beta.1`

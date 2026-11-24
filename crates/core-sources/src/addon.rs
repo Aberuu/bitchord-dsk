@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 use url::Url;
 use uuid::Uuid;
 
-const PROBE_TIMEOUT_SECS: u64 = 10;
-const STREAM_TIMEOUT_SECS: u64 = 20;
+const PROBE_TIMEOUT_SECS: u64 = 25;
+const STREAM_TIMEOUT_SECS: u64 = 25;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -250,6 +250,13 @@ fn parse_manifest_into_config(
         display_host(base_url)
     };
 
+    let inferred_lossless = quality_options.iter().any(|o| {
+        let v = o.value.to_ascii_lowercase();
+        let l = o.label.to_ascii_lowercase();
+        v.contains("lossless") || v.contains("flac") || l.contains("lossless") || l.contains("flac")
+    }) || manifest.id.to_ascii_lowercase().contains("flac")
+        || manifest.name.to_ascii_lowercase().contains("flac");
+
     Ok(StoredAddonConfig {
         id: existing
             .map(|e| e.id.clone())
@@ -261,7 +268,7 @@ fn parse_manifest_into_config(
         picked_quality,
         quality_options,
         allow_downloads: json_flag_bool(manifest.allow_downloads.as_ref(), true),
-        check_valid_lossless: json_flag_bool(manifest.check_valid_lossless.as_ref(), false),
+        check_valid_lossless: json_flag_bool(manifest.check_valid_lossless.as_ref(), inferred_lossless),
         bitchord_auth: json_flag_bool(manifest.bitchord_auth.as_ref(), false),
         version: manifest.version,
         default_settings,
@@ -365,7 +372,9 @@ pub async fn probe_addon(http: &reqwest::Client, config: &StoredAddonConfig) -> 
             reason: "Invalid addon URL".to_string(),
         };
     };
-    url.query_pairs_mut().append_pair("q", "never gonna give you up");
+    url.query_pairs_mut()
+        .append_pair("q", "never gonna give you up")
+        .append_pair("limit", "1");
     apply_addon_query_params(&mut url, config, None);
 
     let started = Instant::now();
@@ -463,16 +472,26 @@ fn parse_search_json(raw: &str, source_id: &str, source_name: &str) -> Result<Ve
         let duration_sec = obj
             .get("durationSec")
             .or_else(|| obj.get("duration"))
-            .and_then(|v| v.as_f64())
+            .and_then(|v| {
+                v.as_f64()
+                    .or_else(|| v.as_str().and_then(|s| s.trim().parse::<f64>().ok()))
+            })
+            .filter(|d| d.is_finite() && *d >= 0.0)
             .map(|d| if d > 36000.0 { (d / 1000.0).round() as i64 } else { d.round() as i64 });
 
         let format = obj.get("format").and_then(|v| v.as_str()).map(str::to_string);
         let codec = obj.get("codec").and_then(|v| v.as_str()).map(str::to_string);
+        let audio_quality = obj
+            .get("audioQuality")
+            .or_else(|| obj.get("quality"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let lossless = obj.get("lossless").and_then(|v| v.as_bool()).unwrap_or_else(|| {
             let joined = format!(
-                "{} {}",
+                "{} {} {}",
                 codec.as_deref().unwrap_or(""),
-                format.as_deref().unwrap_or("")
+                format.as_deref().unwrap_or(""),
+                audio_quality
             )
             .to_ascii_lowercase();
             joined.contains("flac") || joined.contains("alac") || joined.contains("wav") || joined.contains("lossless")
@@ -489,6 +508,7 @@ fn parse_search_json(raw: &str, source_id: &str, source_name: &str) -> Result<Ve
             explicit: obj.get("explicit").and_then(|v| v.as_bool()).unwrap_or(false),
             artwork_url: obj
                 .get("artworkUrl")
+                .or_else(|| obj.get("artworkURL"))
                 .or_else(|| obj.get("cover"))
                 .or_else(|| obj.get("thumbnail"))
                 .and_then(|v| v.as_str())
@@ -550,12 +570,16 @@ struct RawStreamPayload {
     format: Option<String>,
     #[serde(default)]
     codec: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "bitrate")]
     bitrate_kbps: Option<i64>,
-    #[serde(default)]
+    #[serde(default, alias = "sampleRate")]
     sample_rate_hz: Option<i64>,
     #[serde(default)]
     bit_depth: Option<i64>,
+    #[serde(default)]
+    quality: Option<String>,
+    #[serde(default)]
+    audio_quality: Option<String>,
     #[serde(default)]
     lossless: Option<bool>,
 }
@@ -615,13 +639,19 @@ pub async fn resolve_addon_stream(
     let format = payload.format.or_else(|| track.format.clone());
     let lossless = payload.lossless.unwrap_or_else(|| {
         let hint = format!(
-            "{} {} {}",
+            "{} {} {} {} {}",
             codec.as_deref().unwrap_or(""),
             format.as_deref().unwrap_or(""),
-            payload.mime_type.as_deref().unwrap_or("")
+            payload.mime_type.as_deref().unwrap_or(""),
+            payload.audio_quality.as_deref().unwrap_or(""),
+            payload.quality.as_deref().unwrap_or("")
         )
         .to_ascii_lowercase();
-        hint.contains("flac") || hint.contains("alac") || hint.contains("wav") || track.lossless
+        hint.contains("flac")
+            || hint.contains("alac")
+            || hint.contains("wav")
+            || hint.contains("lossless")
+            || track.lossless
     });
 
     Ok(ResolvedSourceStream {
@@ -737,6 +767,106 @@ mod tests {
         let stream = resolve_addon_stream(&http, &probe.config, &hits[0]).await.unwrap();
         assert_eq!(stream.url, "https://cdn.example.com/audio/trk-42.flac");
         assert_eq!(stream.sample_rate_hz, Some(96000));
+        assert!(stream.lossless);
+    }
+
+    #[tokio::test]
+    async fn bitchord_flac_addon_schema_roundtrip() {
+        use axum::{extract::Path, routing::get, Json, Router};
+        use tokio::net::TcpListener;
+
+        let app = Router::new()
+            .route(
+                "/manifest.json",
+                get(|| async {
+                    Json(serde_json::json!({
+                        "id": "bitchord-internet-archive-flac",
+                        "name": "Layz Add On",
+                        "version": "1.6.0",
+                        "resources": ["search", "stream"],
+                        "settings": [
+                            {
+                                "key": "quality",
+                                "type": "select",
+                                "default": "lossless",
+                                "options": [
+                                    { "value": "lossless", "label": "FLAC Lossless" },
+                                    { "value": "high", "label": "High MP3" }
+                                ]
+                            }
+                        ]
+                    }))
+                }),
+            )
+            .route(
+                "/search",
+                get(|| async {
+                    Json(serde_json::json!({
+                        "tracks": [
+                            {
+                                "id": "ia-track-1",
+                                "title": "Moonlight Sonata",
+                                "artist": "Beethoven",
+                                "album": "Archive Classical",
+                                "duration": "312.4",
+                                "artworkURL": "https://archive.org/services/img/ia-track-1",
+                                "format": "flac",
+                                "audioQuality": "LOSSLESS",
+                                "quality": "Hi-Res Lossless 24-bit / 96 kHz",
+                                "sampleRate": 96000,
+                                "bitDepth": 24,
+                                "bitrate": 2800
+                            }
+                        ]
+                    }))
+                }),
+            )
+            .route(
+                "/stream/{id}",
+                get(|Path(id): Path<String>| async move {
+                    Json(serde_json::json!({
+                        "url": format!("https://archive.org/download/{id}/track.flac"),
+                        "format": "flac",
+                        "quality": "Hi-Res Lossless 24-bit / 96 kHz",
+                        "audioQuality": "LOSSLESS",
+                        "codec": "flac",
+                        "container": "flac",
+                        "sampleRate": 96000,
+                        "bitDepth": 24,
+                        "bitrate": 2800
+                    }))
+                }),
+            );
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let http = reqwest::Client::new();
+        let probe = identify_and_probe(&http, &format!("http://127.0.0.1:{}", addr.port()), None)
+            .await
+            .unwrap();
+        assert_eq!(probe.config.name, "Layz Add On");
+        assert!(probe.config.check_valid_lossless);
+        assert!(matches!(probe.health, AddonHealthStatus::Ok { .. }));
+
+        let hits = search_addon(&http, &probe.config, "moonlight", None, None).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].duration_sec, Some(312));
+        assert_eq!(
+            hits[0].artwork_url.as_deref(),
+            Some("https://archive.org/services/img/ia-track-1")
+        );
+        assert!(hits[0].lossless);
+        assert_eq!(hits[0].sample_rate_hz, Some(96000));
+        assert_eq!(hits[0].bit_depth, Some(24));
+        assert_eq!(hits[0].bitrate_kbps, Some(2800));
+
+        let stream = resolve_addon_stream(&http, &probe.config, &hits[0]).await.unwrap();
+        assert_eq!(stream.url, "https://archive.org/download/ia-track-1/track.flac");
+        assert_eq!(stream.sample_rate_hz, Some(96000));
+        assert_eq!(stream.bit_depth, Some(24));
+        assert_eq!(stream.bitrate_kbps, Some(2800));
         assert!(stream.lossless);
     }
 }
