@@ -43,6 +43,9 @@
 | **Listening Stats & Replay** | 🟢 Beta Ready | SQLite-backed listening tracker, top songs/artists, and Replay cards |
 | **Search & UpNext Queue** | 🟢 Beta Ready | Search options, shortcut quick-select, and dynamic queue timeline |
 | **Listen Together (Party)** | 🟡 In Testing | WebSocket party synchronization with server clock drift compensation |
+| **Cast (CastV2 & DLNA)** | 🟢 Beta Ready | Device discovery, media relay, and CastModal playback controls |
+| **External Sources** | 🟢 Beta Ready | `core-sources` integration for WebDAV, SMB, JioSaavn, and addons |
+| **System Tray Preferences**| 🟢 Beta Ready | Configurable close-to-tray behavior and tray controls |
 | **Offline Downloads** | ⚪ In Progress | Local audio storage with ID3 metadata embedding (Planned for v0.2.0) |
 
 ---
@@ -92,7 +95,8 @@ bitchord-dsk/
 │   ├── core-stats/                 # Local listening tracker & SQLite replay generator
 │   ├── core-party/                 # Listen Together WebSocket client & clock sync
 │   ├── core-auth/                  # DPAPI Windows authentication & session store
-│   ├── core-integrations/          # SMTC (souvlaki) & Discord Rich Presence
+│   ├── core-integrations/          # SMTC (souvlaki), CastV2/DLNA, & Discord Rich Presence
+│   ├── core-sources/               # External sources (WebDAV, SMB, JioSaavn, addons)
 │   └── core-downloads/             # Local offline caching & metadata tagging
 │
 ├── src-tauri/                      # Tauri v2 native bridge & Windows commands
@@ -256,7 +260,8 @@ src-tauri/target/release/bundle/nsis/
 ## 📦 Release History
 
 ### `v0.8.0-beta.808` (Current - Beta Testing)
-- **Audio & Playback:** Added Bit-Perfect bypass mode (disables Web Audio EQ & software volume for bit-exact DAC output), audio device hotplugging, and audio tap worklet.
+- **Audio & Playback:** Added Bit-Perfect bypass mode (disables Web Audio EQ & software volume for bit-exact DAC output), audio device hotplugging, audio tap worklet, and direct stream resolver.
+- **Casting & External Sources:** Added CastV2 & DLNA casting (`CastModal`), `core-sources` (WebDAV, SMB, JioSaavn, addons), and system tray close-behavior preferences.
 - **UI & Shell:** Added Developer Watermark, refined `TitleBar`, `AppShell`, `FullScreenPlayer`, and custom scrollbar styling.
 
 ### `v0.1.0-beta.1`
