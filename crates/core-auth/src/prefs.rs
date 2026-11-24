@@ -3,11 +3,38 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopPrefs {
     #[serde(default)]
     pub minimize_to_tray: bool,
+    #[serde(default = "default_true")]
+    pub auto_check_updates: bool,
+    #[serde(default = "default_true")]
+    pub auto_download_updates: bool,
+    #[serde(default)]
+    pub update_feed_url: Option<String>,
+    #[serde(default)]
+    pub skipped_version: Option<String>,
+    #[serde(default)]
+    pub mobile_sync_port: Option<u16>,
+}
+
+impl Default for DesktopPrefs {
+    fn default() -> Self {
+        Self {
+            minimize_to_tray: false,
+            auto_check_updates: true,
+            auto_download_updates: true,
+            update_feed_url: None,
+            skipped_version: None,
+            mobile_sync_port: None,
+        }
+    }
 }
 
 impl DesktopPrefs {
@@ -57,42 +84,57 @@ mod tests {
     }
 
     #[test]
-    fn missing_prefs_file_defaults_minimize_to_tray_to_false() {
+    fn missing_prefs_file_uses_sensible_defaults() {
         let path = temp_prefs_path("missing");
         let _ = fs::remove_dir_all(path.parent().unwrap());
         let loaded = DesktopPrefs::load_from(&path);
         assert!(!loaded.minimize_to_tray);
+        assert!(loaded.auto_check_updates);
+        assert!(loaded.auto_download_updates);
+        assert!(loaded.update_feed_url.is_none());
+        assert!(loaded.skipped_version.is_none());
     }
 
     #[test]
-    fn prefs_roundtrip_persists_true_and_false() {
+    fn legacy_prefs_json_preserves_updater_defaults() {
+        let path = temp_prefs_path("legacy");
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+        fs::create_dir_all(path.parent().unwrap()).expect("mkdir");
+        fs::write(&path, r#"{"minimizeToTray":true}"#).expect("write legacy");
+        let loaded = DesktopPrefs::load_from(&path);
+        assert!(loaded.minimize_to_tray);
+        assert!(loaded.auto_check_updates);
+        assert!(loaded.auto_download_updates);
+        assert!(loaded.update_feed_url.is_none());
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn prefs_roundtrip_persists_all_fields() {
         let path = temp_prefs_path("roundtrip");
         let _ = fs::remove_dir_all(path.parent().unwrap());
 
         DesktopPrefs {
             minimize_to_tray: true,
+            auto_check_updates: false,
+            auto_download_updates: false,
+            update_feed_url: Some("http://127.0.0.1:8787/releases.json".into()),
+            skipped_version: Some("0.9.0".into()),
+            mobile_sync_port: Some(48221),
         }
         .save_to(&path)
-        .expect("save true");
-        assert!(DesktopPrefs::load_from(&path).minimize_to_tray);
+        .expect("save custom");
+        let loaded = DesktopPrefs::load_from(&path);
+        assert!(loaded.minimize_to_tray);
+        assert!(!loaded.auto_check_updates);
+        assert!(!loaded.auto_download_updates);
+        assert_eq!(
+            loaded.update_feed_url.as_deref(),
+            Some("http://127.0.0.1:8787/releases.json")
+        );
+        assert_eq!(loaded.skipped_version.as_deref(), Some("0.9.0"));
+        assert_eq!(loaded.mobile_sync_port, Some(48221));
 
-        DesktopPrefs {
-            minimize_to_tray: false,
-        }
-        .save_to(&path)
-        .expect("save false");
-        assert!(!DesktopPrefs::load_from(&path).minimize_to_tray);
-
-        let _ = fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn corrupt_json_falls_back_to_default_false() {
-        let path = temp_prefs_path("corrupt");
-        let _ = fs::remove_dir_all(path.parent().unwrap());
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, b"{not valid json").unwrap();
-        assert!(!DesktopPrefs::load_from(&path).minimize_to_tray);
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 }

@@ -2,7 +2,8 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { usePlayer } from '@/state/player';
 import { useUi } from '@/state/ui';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 
@@ -49,6 +50,7 @@ function Harness() {
             </div>
           }
         />
+        <Route path="/lyrics" element={<div key="lyrics">Lyrics</div>} />
       </Routes>
     </div>
   );
@@ -62,13 +64,30 @@ describe('useKeyboardShortcuts Ctrl+K', () => {
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
-    useUi.setState({ fullScreen: false, fullScreenSearchOpen: false });
+    useUi.setState({
+      fullScreen: false,
+      fullScreenSearchOpen: false,
+      shortcutsOpen: false,
+      audioOutputOpen: false,
+      audioPipelineOpen: false,
+      sidePanel: null,
+      mandatoryUpdateLocked: false,
+    });
   });
 
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
-    useUi.setState({ fullScreen: false, fullScreenSearchOpen: false });
+    useUi.setState({
+      fullScreen: false,
+      fullScreenSearchOpen: false,
+      shortcutsOpen: false,
+      audioOutputOpen: false,
+      audioPipelineOpen: false,
+      sidePanel: null,
+      mandatoryUpdateLocked: false,
+    });
+    usePlayer.setState({ nowPlaying: null, muted: false, shuffle: false, repeat: 'off', volume: 0.5 });
   });
 
   it('leaves /settings Search settings, navigates to /search, and focuses & selects music search', async () => {
@@ -223,5 +242,151 @@ describe('useKeyboardShortcuts Ctrl+K', () => {
     });
     expect(closeEv.defaultPrevented).toBe(true);
     expect(useUi.getState().sidebarCompact).toBe(false);
+  });
+
+  it('handles F fullscreen, M mute, S shuffle, R repeat, Q up-next, L lyrics, O output, P pipeline, and ? modal', () => {
+    usePlayer.setState({
+      nowPlaying: {
+        videoId: 'v1',
+        title: 'Track 1',
+        artist: 'Artist 1',
+        artworkUrl: null,
+        durationSec: 200,
+        streamInfo: null,
+        stream: null,
+      },
+      muted: false,
+      shuffle: false,
+      repeat: 'off',
+      volume: 0.5,
+    });
+
+    act(() => {
+      root.render(
+        <MemoryRouter initialEntries={['/home']}>
+          <Harness />
+        </MemoryRouter>,
+      );
+    });
+
+    // F toggles fullscreen when a track is loaded.
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', bubbles: true, cancelable: true }));
+    });
+    expect(useUi.getState().fullScreen).toBe(true);
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F', bubbles: true, cancelable: true }));
+    });
+    expect(useUi.getState().fullScreen).toBe(false);
+
+    // M, S, R player controls.
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', bubbles: true, cancelable: true }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', bubbles: true, cancelable: true }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', bubbles: true, cancelable: true }));
+    });
+    expect(usePlayer.getState().muted).toBe(true);
+    expect(usePlayer.getState().shuffle).toBe(true);
+    expect(usePlayer.getState().repeat).toBe('all');
+
+    // Q toggles Up Next side panel.
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'q', bubbles: true, cancelable: true }));
+    });
+    expect(useUi.getState().sidePanel).toBe('up-next');
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'q', bubbles: true, cancelable: true }));
+    });
+    expect(useUi.getState().sidePanel).toBe(null);
+
+    // L toggles Lyrics route.
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'l', bubbles: true, cancelable: true }));
+    });
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/lyrics');
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'l', bubbles: true, cancelable: true }));
+    });
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/home');
+
+    // O and P open Audio Output and Pipeline dialogs.
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'o', bubbles: true, cancelable: true }));
+    });
+    expect(useUi.getState().audioOutputOpen).toBe(true);
+    act(() => {
+      useUi.setState({ audioOutputOpen: false });
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', bubbles: true, cancelable: true }));
+    });
+    expect(useUi.getState().audioPipelineOpen).toBe(true);
+    act(() => {
+      useUi.setState({ audioPipelineOpen: false });
+    });
+
+    // ? opens ShortcutsModal and Escape closes it.
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '?', shiftKey: true, bubbles: true, cancelable: true }));
+    });
+    expect(useUi.getState().shortcutsOpen).toBe(true);
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
+    expect(useUi.getState().shortcutsOpen).toBe(false);
+  });
+
+  it('seeks 5s on bare Left/Right, changes volume 5% on Up/Down, respects slider guard and mandatory update lock', () => {
+    const seekSpy = vi.spyOn(usePlayer.getState(), 'seek').mockImplementation(() => {});
+    usePlayer.setState({
+      nowPlaying: {
+        videoId: 'v1',
+        title: 'Track 1',
+        artist: 'Artist 1',
+        artworkUrl: null,
+        durationSec: 120,
+        streamInfo: null,
+        stream: null,
+      },
+      volume: 0.5,
+    });
+
+    act(() => {
+      root.render(
+        <MemoryRouter initialEntries={['/home']}>
+          <Harness />
+        </MemoryRouter>,
+      );
+    });
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
+    });
+    expect(seekSpy).toHaveBeenCalledWith(5);
+    expect(usePlayer.getState().volume).toBeCloseTo(0.55, 2);
+
+    // Focused slider prevents bare arrow hijack.
+    const slider = document.createElement('div');
+    slider.setAttribute('role', 'slider');
+    slider.tabIndex = 0;
+    host.appendChild(slider);
+    act(() => {
+      slider.focus();
+      slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+      slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+    });
+    expect(seekSpy).toHaveBeenCalledTimes(1);
+    expect(usePlayer.getState().volume).toBeCloseTo(0.55, 2);
+    slider.blur();
+
+    // Mandatory update lock blocks all shortcuts including ? and F.
+    act(() => {
+      useUi.setState({ mandatoryUpdateLocked: true });
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '?', shiftKey: true, bubbles: true, cancelable: true }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', bubbles: true, cancelable: true }));
+    });
+    expect(useUi.getState().shortcutsOpen).toBe(false);
+    expect(useUi.getState().fullScreen).toBe(false);
+
+    seekSpy.mockRestore();
   });
 });

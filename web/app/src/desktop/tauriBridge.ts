@@ -20,10 +20,64 @@ export interface DesktopBootstrap {
 }
 
 export interface UpdateCheckResult {
-  status: 'up_to_date' | 'available' | 'unconfigured' | 'error';
+  status: 'up_to_date' | 'available' | 'mandatory' | 'downloaded' | 'unconfigured' | 'error';
   currentVersion: string;
   latestVersion: string | null;
+  majorPatchLag: number;
+  maxMajorPatchLag: number;
+  mandatory: boolean;
+  releaseUrl: string | null;
+  installerUrl: string | null;
+  installerSha256: string | null;
+  installerFileName: string | null;
+  downloadedPath: string | null;
   notes: string | null;
+}
+
+export interface UpdaterPrefs {
+  autoCheckUpdates: boolean;
+  autoDownloadUpdates: boolean;
+  updateFeedUrl: string | null;
+  skippedVersion: string | null;
+}
+
+export interface UpdateDownloadProgress {
+  receivedBytes: number;
+  totalBytes: number | null;
+  phase: 'downloading' | 'verifying' | 'ready' | 'error';
+  message: string | null;
+}
+
+export interface MobileSyncStatus {
+  running: boolean;
+  port: number | null;
+  localIp: string | null;
+  adapterName: string | null;
+  partyServerUrl: string | null;
+  syncPortalUrl: string | null;
+  syncPin: string;
+  activeParties: number;
+  connectedClients: number;
+}
+
+export interface PeerDeviceSummary {
+  deviceId: string;
+  deviceName: string;
+  updatedAtMs: number;
+  months: number;
+  tracks: number;
+  fromVersion: string;
+  exportedAt: string;
+}
+
+export interface PeerSyncResult {
+  deviceId: string;
+  deviceName: string;
+  months: number;
+  tracks: number;
+  fromVersion: string;
+  exportedAt: string;
+  updatedAtMs: number;
 }
 
 export interface WatermarkStatus {
@@ -606,4 +660,50 @@ export const desktopApi = {
       ext: ext ?? null,
       startSec: startSec ?? null,
     }),
+
+  updaterGetPrefs: () => invoke<UpdaterPrefs>('updater_get_prefs'),
+  updaterSetPrefs: (patch: {
+    autoCheckUpdates?: boolean;
+    autoDownloadUpdates?: boolean;
+    updateFeedUrl?: string;
+    skippedVersion?: string;
+  }) =>
+    invoke<UpdaterPrefs>('updater_set_prefs', {
+      autoCheckUpdates: patch.autoCheckUpdates ?? null,
+      autoDownloadUpdates: patch.autoDownloadUpdates ?? null,
+      updateFeedUrl: patch.updateFeedUrl ?? null,
+      skippedVersion: patch.skippedVersion ?? null,
+    }),
+  downloadUpdate: (
+    installerUrl: string,
+    fileName?: string | null,
+    expectedSha256?: string | null,
+  ) =>
+    invoke<string>('download_update', {
+      installerUrl,
+      fileName: fileName ?? null,
+      expectedSha256: expectedSha256 ?? null,
+    }),
+  installUpdate: (downloadedPath: string) => invoke<void>('install_update', { downloadedPath }),
+  exitApp: () => invoke<void>('exit_app'),
+  onUpdaterProgress: (listener: (progress: UpdateDownloadProgress) => void) =>
+    listen<UpdateDownloadProgress>('updater://progress', (ev) => listener(ev.payload)),
+
+  mobileSyncStatus: () => invoke<MobileSyncStatus>('mobile_sync_status'),
+  mobileSyncStartServer: () => invoke<MobileSyncStatus>('mobile_sync_start_server'),
+  mobileSyncStopServer: () => invoke<MobileSyncStatus>('mobile_sync_stop_server'),
+  mobileSyncRotatePin: () => invoke<MobileSyncStatus>('mobile_sync_rotate_pin'),
+  onMobileSyncUpdated: (listener: (res: PeerSyncResult) => void) =>
+    listen<PeerSyncResult>('mobile-sync://updated', (ev) => listener(ev.payload)),
+
+  statsMergePeerBackup: (rawJson: string, deviceId?: string | null, deviceName?: string | null) =>
+    invoke<PeerSyncResult>('stats_merge_peer_backup', {
+      rawJson,
+      deviceId: deviceId ?? null,
+      deviceName: deviceName ?? null,
+    }),
+  statsListSyncedPeers: () => invoke<PeerDeviceSummary[]>('stats_list_synced_peers'),
+  statsRemoveSyncedPeer: (deviceId: string) =>
+    invoke<boolean>('stats_remove_synced_peer', { deviceId }),
+  statsExportCombinedBackup: () => invoke<string>('stats_export_combined_backup'),
 };

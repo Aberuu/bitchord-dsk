@@ -1,6 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { isTauriDesktop } from './tauriBridge';
+import {
+  isTauriDesktop,
+  type PeerDeviceSummary,
+  type PeerSyncResult,
+} from './tauriBridge';
 
 export type ReplayPeriod = 'this_week' | 'this_month' | 'this_year' | 'all_time';
 export type ReplayFocus = 'minutes' | 'songs' | 'artists' | 'albums';
@@ -579,7 +583,7 @@ export const statsApi = {
 
   exportBackupJson: async (): Promise<string> => {
     if (isTauriDesktop()) {
-      return invoke<string>('stats_export_backup');
+      return invoke<string>('stats_export_combined_backup');
     }
     const buckets = readLocalBuckets();
     return JSON.stringify(
@@ -594,6 +598,54 @@ export const statsApi = {
       null,
       2,
     );
+  },
+
+  mergePeerBackupJson: async (
+    rawJson: string,
+    deviceId?: string | null,
+    deviceName?: string | null,
+  ): Promise<PeerSyncResult> => {
+    if (isTauriDesktop()) {
+      return invoke<PeerSyncResult>('stats_merge_peer_backup', {
+        rawJson,
+        deviceId: deviceId ?? null,
+        deviceName: deviceName ?? null,
+      });
+    }
+    const { buckets, fromVersion, exportedAt } = parseAndValidateBackupJson(rawJson);
+    const existing = readLocalBuckets();
+    const byMonth = new Map<string, StoredBucket>();
+    for (const b of existing) byMonth.set(b.month, b);
+    for (const incoming of buckets) {
+      if (!byMonth.has(incoming.month)) {
+        byMonth.set(incoming.month, incoming);
+      }
+    }
+    writeLocalBuckets(Array.from(byMonth.values()));
+    const tracks = buckets.reduce((acc, b) => acc + (b.tracks?.length ?? 0), 0);
+    return {
+      deviceId: deviceId ?? 'mobile-device',
+      deviceName: deviceName ?? 'Mobile Device',
+      months: buckets.length,
+      tracks,
+      fromVersion,
+      exportedAt,
+      updatedAtMs: Date.now(),
+    };
+  },
+
+  listSyncedPeers: async (): Promise<PeerDeviceSummary[]> => {
+    if (isTauriDesktop()) {
+      return invoke<PeerDeviceSummary[]>('stats_list_synced_peers');
+    }
+    return [];
+  },
+
+  removeSyncedPeer: async (deviceId: string): Promise<boolean> => {
+    if (isTauriDesktop()) {
+      return invoke<boolean>('stats_remove_synced_peer', { deviceId });
+    }
+    return false;
   },
 
   importBackupJson: async (rawJson: string): Promise<BackupSummary> => {

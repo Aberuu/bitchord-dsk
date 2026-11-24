@@ -5,6 +5,7 @@ import {
   CircleArrowDown,
   CirclePlay,
   FileMusic,
+  Keyboard,
   MessageSquareQuote,
   MonitorDown,
   Paintbrush,
@@ -109,6 +110,7 @@ export default function SettingsPage() {
   const pipeline = useAudioPipeline();
   const desktop = isTauriDesktop();
   const setPipelineOpen = useUi((s) => s.setAudioPipelineOpen);
+  const setShortcutsOpen = useUi((s) => s.setShortcutsOpen);
   const minimizeToTray = useUi((s) => s.minimizeToTray);
   const setMinimizeToTray = useUi((s) => s.setMinimizeToTray);
   const directSourceStream = usePlayer((s) => s.directSourceStream);
@@ -210,8 +212,15 @@ export default function SettingsPage() {
         keywords: 'lyrics providers lrc lrclib musixmatch genius betterlyrics syllables',
         action: () => setLyricsOpen(true),
       },
+      {
+        id: 'shortcuts',
+        title: 'Keyboard shortcuts',
+        subtitle: 'Fullscreen (F), Mute (M), Lyrics (L), Up Next (Q), Seek & Volume keys',
+        keywords: 'keyboard shortcuts hotkeys keybindings fullscreen mute lyrics queue seek volume',
+        action: () => setShortcutsOpen(true),
+      },
     ],
-    [pipeline.shortSubtitle, setPipelineOpen],
+    [pipeline.shortSubtitle, setPipelineOpen, setShortcutsOpen],
   );
 
   const trimmed = query.trim().toLowerCase();
@@ -449,6 +458,12 @@ export default function SettingsPage() {
                 onClick={() => setLyricsOpen(true)}
                 icon={<MessageSquareQuote size={20} strokeWidth={1.9} aria-hidden="true" />}
                 title="Lyric Sources"
+              />
+              <HubRow
+                onClick={() => setShortcutsOpen(true)}
+                icon={<Keyboard size={20} strokeWidth={1.9} aria-hidden="true" />}
+                title="Keyboard shortcuts"
+                value="?"
               />
             </section>
 

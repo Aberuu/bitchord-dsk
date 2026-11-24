@@ -5,7 +5,7 @@ import { getBridge } from '@/extension/bridge';
 import { extensionQueryKey } from '@/extension/useExtension';
 import { ensureYtAuth } from '@/extension/useYtAuth';
 import { queryClient } from '@/lib/queryClient';
-import { getAudio, onTrackEnded, usePlayer } from '@/state/player';
+import { getPlayhead, onTrackEnded, usePlayer } from '@/state/player';
 import { getSignedInnertube } from './youtube/innertube';
 import { trackLog } from './trackLog';
 
@@ -214,9 +214,9 @@ function sample(): void {
     return;
   }
 
-  const audio = getAudio();
-  if (!audio) return;
-  const position = audio.currentTime;
+  const head = getPlayhead();
+  if (!head) return;
+  const position = head.sec;
   session.heard = Math.max(session.heard, position);
   const current = session;
   if (!current.atrSent && position >= current.tracking.atrAfterSec && current.tracking.atr) {
@@ -245,8 +245,8 @@ export function startHistoryReporting(): () => void {
   // loop keeps the same video, so it is only a new play this way, and the queue's last song
   // gets its closing report instead of reading as abandoned at the last 30 s sample.
   const offEnded = onTrackEnded(() => {
-    const audio = getAudio();
-    if (session && audio) session.heard = Math.max(session.heard, audio.currentTime);
+    const head = getPlayhead();
+    if (session && head) session.heard = Math.max(session.heard, head.sec);
     close();
   });
   const timer = setInterval(sample, SAMPLE_MS);

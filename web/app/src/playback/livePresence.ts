@@ -34,6 +34,14 @@ function installId(): string {
 export function startLivePresence(): () => void {
   const server = config.partyServerUrl.replace(/\/+$/, '');
   if (!server) return () => {};
+  // Skip cross-origin telemetry pings from local/Tauri origins where the cloud host rejects CORS preflight.
+  if (
+    typeof window !== 'undefined' &&
+    /^(localhost|127\.0\.0\.1|tauri\.localhost)$/i.test(window.location.hostname) &&
+    !server.startsWith(window.location.origin)
+  ) {
+    return () => {};
+  }
   const endpoint = `${server}/api/presence`;
   const id = installId();
   let intervalSec = DEFAULT_INTERVAL_SEC;

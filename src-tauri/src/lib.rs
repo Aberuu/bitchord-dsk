@@ -1,10 +1,13 @@
 mod auth_windows;
 mod commands;
 mod tray;
+pub mod updater;
 
 use core_auth::{DesktopPrefs, SecretVault, SpotifyService, YouTubeAuthService};
 use core_downloads::LibraryStore;
-use core_integrations::{CastService, DiscordService, ScrobbleService, SmtcController};
+use core_integrations::{
+    CastService, DiscordService, MobileSyncService, ScrobbleService, SmtcController,
+};
 use core_lyrics::LyricsProxy;
 use core_playback::{AudioHotplugWatcher, AudioTapServer, NativeAudioEngine};
 use core_sources::SourcesService;
@@ -30,12 +33,14 @@ pub struct AppState {
     pub stats: Arc<ListeningStatsStore>,
     pub playback: Arc<NativeAudioEngine>,
     pub cast: Arc<CastService>,
+    pub mobile_sync: Arc<MobileSyncService>,
     pub audio_tap_url: String,
     pub _audio_hotplug: AudioHotplugWatcher,
     pub smtc: Mutex<Option<SmtcController>>,
     pub vibrancy_mode: Mutex<String>,
-    pub minimize_to_tray: Mutex<bool>,
+    pub prefs: Mutex<DesktopPrefs>,
     pub prefs_path: PathBuf,
+    pub http: reqwest::Client,
 }
 
 pub async fn shutdown_and_exit(app: &AppHandle) {
@@ -47,6 +52,7 @@ pub async fn shutdown_and_exit(app: &AppHandle) {
         )
         .await;
         let _ = state.stats.flush();
+        state.mobile_sync.stop();
         state.discord.shutdown();
         state.playback.stop();
     }
@@ -140,6 +146,15 @@ pub fn run() {
                 }),
             ));
 
+            let app_handle_mobile = app.handle().clone();
+            let mobile_sync = Arc::new(MobileSyncService::new(
+                Arc::clone(&stats),
+                Arc::new(move |peer| {
+                    let _ = app_handle_mobile.emit("stats://updated", json!({}));
+                    let _ = app_handle_mobile.emit("mobile-sync://updated", &peer);
+                }),
+            ));
+
             let (desktop_prefs, prefs_path) = DesktopPrefs::load_default();
             let initial_tray = desktop_prefs.minimize_to_tray;
 
@@ -187,12 +202,14 @@ pub fn run() {
                 stats: Arc::clone(&stats),
                 playback,
                 cast,
+                mobile_sync,
                 audio_tap_url,
                 _audio_hotplug: audio_hotplug,
                 smtc: Mutex::new(smtc_ctrl),
                 vibrancy_mode: Mutex::new(vibrancy),
-                minimize_to_tray: Mutex::new(initial_tray),
+                prefs: Mutex::new(desktop_prefs),
                 prefs_path,
+                http: http.clone(),
             };
             app.manage(state);
 
@@ -205,7 +222,7 @@ pub fn run() {
             if window.label() == "main" {
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     let state = window.state::<AppState>();
-                    if *state.minimize_to_tray.lock() {
+                    if state.prefs.lock().minimize_to_tray {
                         api.prevent_close();
                         let _ = window.hide();
                     } else {
@@ -272,9 +289,22 @@ pub fn run() {
             commands::stats_flush,
             commands::stats_get_summary,
             commands::stats_export_backup,
+            commands::stats_export_combined_backup,
             commands::stats_import_backup,
+            commands::stats_merge_peer_backup,
+            commands::stats_list_synced_peers,
+            commands::stats_remove_synced_peer,
+            commands::mobile_sync_status,
+            commands::mobile_sync_start_server,
+            commands::mobile_sync_stop_server,
+            commands::mobile_sync_rotate_pin,
             commands::replay_save_file,
             commands::check_for_updates,
+            commands::updater_get_prefs,
+            commands::updater_set_prefs,
+            commands::download_update,
+            commands::install_update,
+            commands::exit_app,
             commands::get_watermark_status,
             commands::open_devtools_window,
             commands::sources_get_state,

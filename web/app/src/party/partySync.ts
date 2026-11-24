@@ -1,6 +1,6 @@
 import type { Track } from '@/data/music/types';
 import type { QueueTier } from '@/playback/queue/timeline';
-import { getAudio, partyPlayer, setPartyHooks, usePlayer } from '@/state/player';
+import { getPlayhead, partyPlayer, setPartyHooks, usePlayer } from '@/state/player';
 import { controlsLocked, msUntilStart, party, partyPositionMs, useParty, type PartyState } from './listenTogether';
 import type { PartyTrack } from './models';
 import { autoplaySupplierId, detectSingleMove, partyQueueIndexOf, partyUpcomingAfter } from './queueReading';
@@ -77,7 +77,7 @@ function current() {
   return index >= 0 ? (queue[index] ?? null) : null;
 }
 
-const positionMs = () => Math.max(0, (getAudio()?.currentTime ?? 0) * 1000);
+const positionMs = () => Math.max(0, (getPlayhead()?.sec ?? 0) * 1000);
 
 /** Whether the player means to be playing: going, stalled, or loading a track it will start. */
 function playWhenReady(): boolean {
@@ -125,11 +125,15 @@ function onIntent(): void {
 function publish(): void {
   const state = useParty.getState();
   if (!state.code) return;
-  const { queue, index } = usePlayer.getState();
+  const { queue, index, nowPlaying } = usePlayer.getState();
   const entry = current();
   if (!entry) return;
-  const audio = getAudio();
-  const track = toPartyTrack(entry.track, entry.tier, audio && Number.isFinite(audio.duration) ? audio.duration * 1000 : 0);
+  const durSec = nowPlaying?.durationSec || entry.track.durationSec || 0;
+  const track = toPartyTrack(
+    entry.track,
+    entry.tier,
+    Number.isFinite(durSec) && durSec > 0 ? durSec * 1000 : 0,
+  );
   const position = positionMs();
   // During a deferred resume the player isn't going yet; what the user asked for is.
   const wantsPlaying = state.awaitingStart || playWhenReady();
@@ -203,7 +207,7 @@ function shouldDeferPlay(): boolean {
   startTimer = setTimeout(() => {
     if (!useParty.getState().awaitingStart) return;
     setAwaiting(false);
-    if (getAudio()?.paused) partyPlayer.play();
+    if (!playWhenReady()) partyPlayer.play();
   }, DEFERRED_PLAY_TIMEOUT_MS);
   return true;
 }
@@ -360,7 +364,7 @@ function seedEmptyParty(state: PartyState): void {
 
 function onEnteredParty(): void {
   const { queue, index, status } = usePlayer.getState();
-  stash = queue.length ? { queue, index, positionSec: getAudio()?.currentTime ?? 0, wasPlaying: status === 'playing' } : null;
+  stash = queue.length ? { queue, index, positionSec: getPlayhead()?.sec ?? 0, wasPlaying: status === 'playing' } : null;
 }
 
 function onLeftParty(): void {

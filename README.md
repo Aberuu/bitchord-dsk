@@ -42,7 +42,8 @@
 | **Windows DPAPI Security** | 🟢 Beta Ready | Hardware-backed `CryptProtectData` encryption for YouTube session tokens |
 | **Listening Stats & Replay** | 🟢 Beta Ready | SQLite-backed listening tracker, top songs/artists, and Replay cards |
 | **Search & UpNext Queue** | 🟢 Beta Ready | Search options, shortcut quick-select, and dynamic queue timeline |
-| **Listen Together (Party)** | 🟡 In Testing | WebSocket party synchronization with server clock drift compensation |
+| **Listen Together & Mobile Sync** | 🟢 Beta Ready | WebSocket party synchronization, clock drift compensation, and mobile playback/stats sync |
+| **Auto-Updater & Version Gate** | 🟢 Beta Ready | Built-in update checker, banner, and version gate (`updater.rs`) |
 | **Cast (CastV2 & DLNA)** | 🟢 Beta Ready | Device discovery, media relay, and CastModal playback controls |
 | **External Sources** | 🟢 Beta Ready | `core-sources` integration for WebDAV, SMB, JioSaavn, and addons |
 | **System Tray Preferences**| 🟢 Beta Ready | Configurable close-to-tray behavior and tray controls |
@@ -262,7 +263,8 @@ src-tauri/target/release/bundle/nsis/
 ### `v0.8.0-beta.808` (Current - Beta Testing)
 - **Audio & Playback:** Added ASIO output (`asio.rs`) and DSD/DoP enhancements (`dsd.rs`), Bit-Perfect bypass mode (disables Web Audio EQ & software volume for bit-exact DAC output), audio device hotplugging, audio tap worklet, direct stream resolver, and seamless source switching / quality upgrade.
 - **Casting & External Sources:** Added CastV2 & DLNA casting (`CastModal`), `core-sources` (WebDAV, SMB, JioSaavn, FLAC addon via `scripts/run-flac-addon.ps1`), and system tray close-behavior preferences.
-- **UI & Shell:** Added Developer Watermark, collapsible sidebar toggle with keyboard shortcut (`SidebarToggleButton`), refined `TitleBar`, `AppShell`, `FullScreenPlayer`, and custom scrollbar styling.
+- **UI & Shell:** Added Developer Watermark, collapsible sidebar toggle with keyboard shortcut (`SidebarToggleButton`), customizable keyboard shortcuts modal (`ShortcutsModal`), refined `TitleBar`, `AppShell`, `FullScreenPlayer`, and custom scrollbar styling.
+- **Sync & Updates:** Added mobile playback/stats sync (`mobile_sync.rs`) and built-in auto-updater / version gate (`updater.rs`, `UpdateBannerAndGate`).
 
 ### `v0.1.0-beta.1`
 - Initial desktop pre-release for Windows.

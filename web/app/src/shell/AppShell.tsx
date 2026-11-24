@@ -3,6 +3,7 @@ import { Outlet } from 'react-router';
 import { PrefetchLink } from '@/components/PrefetchLink';
 import { config } from '@/config';
 import { isTauriDesktop } from '@/desktop/tauriBridge';
+import { UpdateBannerAndGate } from '@/desktop/UpdateBannerAndGate';
 import { useDesktopIntegrations } from '@/desktop/useDesktopIntegrations';
 import { useExtension } from '@/extension/useExtension';
 import { isMobileBrowser } from '@/lib/platform';
@@ -20,6 +21,7 @@ import { CastModal } from './CastModal';
 import { MobileBottomChrome } from './MobileBottomChrome';
 import { MobileTopBar } from './MobileTopBar';
 import { PlayerBar } from './PlayerBar';
+import { ShortcutsModal } from './ShortcutsModal';
 import { Sidebar } from './Sidebar';
 import { SidebarToggleButton } from './SidebarToggleButton';
 import { SidePanel } from './SidePanel';
@@ -135,6 +137,8 @@ export function AppShell() {
       <AudioOutputModal />
       <AudioPipelineDialog />
       <CastModal />
+      <ShortcutsModal />
+      <UpdateBannerAndGate />
     </div>
   );
 }

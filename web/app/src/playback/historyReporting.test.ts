@@ -10,6 +10,7 @@ const player = create<{ nowPlaying: { videoId: string } | null; status: string }
 vi.mock('@/state/player', () => ({
   usePlayer: player,
   getAudio: () => audio,
+  getPlayhead: () => ({ sec: audio.currentTime, paused: false }),
   onTrackEnded: (listener: () => void) => {
     ended.add(listener);
     return () => ended.delete(listener);

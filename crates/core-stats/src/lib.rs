@@ -5,10 +5,12 @@ use parking_lot::Mutex;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{BTreeSet, HashMap};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const KEEP_MONTHS: usize = 36;
 const MAX_TRACKS: usize = 600;
@@ -779,7 +781,7 @@ impl ListeningStatsStore {
 
     pub fn summary_at(&self, period: ReplayPeriod, today: NaiveDate) -> Result<ReplaySummary> {
         let _ = self.flush();
-        let all_months = self.months();
+        let all_months = self.all_months_including_peers();
         let earliest_all_time = all_months.first().cloned();
         let member_since = earliest_all_time
             .as_deref()
@@ -802,55 +804,54 @@ impl ListeningStatsStore {
             if !period.covers_month(month_key, today) {
                 continue;
             }
-            let Some(bucket) = self.read_bucket(month_key) else {
-                continue;
-            };
-            if earliest_period.is_none() {
-                earliest_period = Some(bucket.month.clone());
-            }
-            for entry in bucket.tracks {
-                let k = merge_key(&entry);
-                tracks
-                    .entry(k)
-                    .and_modify(|existing| existing.absorb(&entry))
-                    .or_insert(entry);
-            }
-            for mut entry in bucket.artists {
-                if let Some(lead) = primary_artist(&entry.name) {
-                    entry.name = lead;
+            for bucket in self.buckets_for_month(month_key) {
+                if earliest_period.is_none() {
+                    earliest_period = Some(bucket.month.clone());
                 }
-                let k = entry.name.to_lowercase();
-                artists
-                    .entry(k)
-                    .and_modify(|existing| existing.absorb(&entry))
-                    .or_insert(entry);
-            }
-            for entry in bucket.albums {
-                let k = album_key(
-                    entry.id.as_deref(),
-                    &entry.name,
-                    entry.sub.as_deref().unwrap_or(""),
-                );
-                albums
-                    .entry(k)
-                    .and_modify(|existing| existing.absorb(&entry))
-                    .or_insert(entry);
-            }
-            if week_range.is_none() {
-                for (i, h) in bucket.hours.iter().take(24).enumerate() {
-                    hours[i] += *h;
+                for entry in bucket.tracks {
+                    let k = merge_key(&entry);
+                    tracks
+                        .entry(k)
+                        .and_modify(|existing| existing.absorb(&entry))
+                        .or_insert(entry);
                 }
-            }
-            for (day_num, ms) in bucket.days {
-                let date_str = format!("{}-{:02}", bucket.month, day_num);
-                if let Some((w_start, w_end)) = week_range {
-                    if let Ok(parsed) = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
-                        if parsed >= w_start && parsed <= w_end {
-                            *days.entry(date_str).or_default() += ms;
-                        }
+                for mut entry in bucket.artists {
+                    if let Some(lead) = primary_artist(&entry.name) {
+                        entry.name = lead;
                     }
-                } else {
-                    *days.entry(date_str).or_default() += ms;
+                    let k = entry.name.to_lowercase();
+                    artists
+                        .entry(k)
+                        .and_modify(|existing| existing.absorb(&entry))
+                        .or_insert(entry);
+                }
+                for entry in bucket.albums {
+                    let k = album_key(
+                        entry.id.as_deref(),
+                        &entry.name,
+                        entry.sub.as_deref().unwrap_or(""),
+                    );
+                    albums
+                        .entry(k)
+                        .and_modify(|existing| existing.absorb(&entry))
+                        .or_insert(entry);
+                }
+                if week_range.is_none() {
+                    for (i, h) in bucket.hours.iter().take(24).enumerate() {
+                        hours[i] += *h;
+                    }
+                }
+                for (day_num, ms) in bucket.days {
+                    let date_str = format!("{}-{:02}", bucket.month, day_num);
+                    if let Some((w_start, w_end)) = week_range {
+                        if let Ok(parsed) = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
+                            if parsed >= w_start && parsed <= w_end {
+                                *days.entry(date_str).or_default() += ms;
+                            }
+                        }
+                    } else {
+                        *days.entry(date_str).or_default() += ms;
+                    }
                 }
             }
         }
@@ -1003,42 +1004,28 @@ impl ListeningStatsStore {
         serde_json::to_string_pretty(&payload).context("serialize BitChord backup JSON")
     }
 
-    pub fn import_backup_json(&self, raw: &str) -> Result<BackupSummary> {
-        let trimmed = raw.trim();
-        let (buckets, from_version, exported_at) = if trimmed.starts_with('[') {
-            let list: Vec<StoredBucket> =
-                serde_json::from_str(trimmed).context("That file is not a valid listening array")?;
-            (list, "buckets".to_string(), String::new())
-        } else {
-            let parsed: Value =
-                serde_json::from_str(trimmed).context("That file does not look like a BitChord backup")?;
-            if parsed.get("month").is_some() && parsed.get("tracks").is_some() {
-                let single: StoredBucket = serde_json::from_value(parsed)
-                    .context("Could not parse single listening month file")?;
-                (vec![single], "month-bucket".to_string(), String::new())
-            } else {
-                let file: BackupFile = serde_json::from_value(parsed)
-                    .context("That file does not look like a BitChord backup")?;
-                if file.app != "bitchord" {
-                    bail!("That backup is from another app ({})", file.app);
-                }
-                if file.version > 1 {
-                    bail!(
-                        "That backup was written by a newer schema version ({})",
-                        file.version
-                    );
-                }
-                (file.listening, file.version_name, file.exported_at)
+    pub fn export_combined_backup_json(&self) -> Result<String> {
+        let _ = self.flush();
+        let mut listening = Vec::new();
+        for month_key in self.all_months_including_peers() {
+            let buckets = self.buckets_for_month(&month_key);
+            if let Some(merged) = merge_stored_buckets(&month_key, buckets) {
+                listening.push(merged);
             }
-        };
-
-        let valid_buckets: Vec<StoredBucket> = buckets
-            .into_iter()
-            .filter(|b| parse_year_month(&b.month).is_some())
-            .collect();
-        if valid_buckets.is_empty() {
-            bail!("No valid YYYY-MM listening months found in that backup file");
         }
+        let payload = BackupFile {
+            app: "bitchord".to_string(),
+            version: 1,
+            version_name: env!("CARGO_PKG_VERSION").to_string(),
+            exported_at: Local::now().to_rfc3339(),
+            settings: json!({}),
+            listening,
+        };
+        serde_json::to_string_pretty(&payload).context("serialize combined BitChord backup JSON")
+    }
+
+    pub fn import_backup_json(&self, raw: &str) -> Result<BackupSummary> {
+        let (valid_buckets, from_version, exported_at) = parse_backup_payload(raw)?;
 
         let mut guard = self.open.lock();
         *guard = None;
@@ -1064,6 +1051,188 @@ impl ListeningStatsStore {
             from_version,
             exported_at,
         })
+    }
+
+    /// Merges a BitChord backup JSON from a mobile/peer device into an isolated
+    /// peer partition without modifying Desktop's own monthly listening files.
+    /// Repeated imports for the same device replace only that peer's partition,
+    /// keeping totals idempotent with zero double-counting.
+    pub fn merge_peer_backup_json(
+        &self,
+        device_id: Option<&str>,
+        device_name: Option<&str>,
+        raw: &str,
+    ) -> Result<PeerSyncResult> {
+        let (valid_buckets, from_version, exported_at) = parse_backup_payload(raw)?;
+        let display_name = device_name
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Mobile Device")
+            .to_string();
+        let safe_id = sanitize_peer_id(
+            device_id
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&display_name),
+        );
+
+        let peers_root = self.peers_dir();
+        let peer_dir = peers_root.join(&safe_id);
+        fs::create_dir_all(&peer_dir)?;
+
+        // Replace only this peer's existing month buckets.
+        if let Ok(entries) = fs::read_dir(&peer_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                    let _ = fs::remove_file(path);
+                }
+            }
+        }
+
+        let mut total_tracks = 0usize;
+        let mut month_hashes = BTreeMap::new();
+        for bucket in &valid_buckets {
+            total_tracks += bucket.tracks.len();
+            let serialized = serde_json::to_string(bucket)?;
+            let mut hasher = Sha256::new();
+            hasher.update(serialized.as_bytes());
+            month_hashes.insert(bucket.month.clone(), hex::encode(hasher.finalize()));
+
+            let file = peer_dir.join(format!("{}.json", bucket.month));
+            let tmp = peer_dir.join(format!("{}.json.tmp", bucket.month));
+            fs::write(&tmp, &serialized)?;
+            if fs::rename(&tmp, &file).is_err() {
+                let _ = fs::remove_file(&file);
+                fs::rename(&tmp, &file)
+                    .with_context(|| format!("write peer bucket {}", bucket.month))?;
+            }
+        }
+
+        let updated_at_ms = now_unix_ms();
+        let manifest = PeerManifest {
+            device_id: safe_id.clone(),
+            device_name: display_name.clone(),
+            updated_at_ms,
+            from_version: from_version.clone(),
+            exported_at: exported_at.clone(),
+            tracks: total_tracks,
+            month_hashes,
+        };
+        let manifest_path = peers_root.join(format!("{safe_id}.manifest.json"));
+        let manifest_tmp = peers_root.join(format!("{safe_id}.manifest.json.tmp"));
+        fs::write(&manifest_tmp, serde_json::to_string_pretty(&manifest)?)?;
+        if fs::rename(&manifest_tmp, &manifest_path).is_err() {
+            let _ = fs::remove_file(&manifest_path);
+            fs::rename(&manifest_tmp, &manifest_path)?;
+        }
+
+        Ok(PeerSyncResult {
+            device_id: safe_id,
+            device_name: display_name,
+            months: valid_buckets.len(),
+            tracks: total_tracks,
+            from_version,
+            exported_at,
+            updated_at_ms,
+        })
+    }
+
+    pub fn list_synced_peers(&self) -> Vec<PeerDeviceSummary> {
+        let peers_root = self.peers_dir();
+        let Ok(entries) = fs::read_dir(&peers_root) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".manifest.json") {
+                continue;
+            }
+            if let Ok(raw) = fs::read_to_string(entry.path()) {
+                if let Ok(m) = serde_json::from_str::<PeerManifest>(&raw) {
+                    out.push(PeerDeviceSummary {
+                        device_id: m.device_id,
+                        device_name: m.device_name,
+                        updated_at_ms: m.updated_at_ms,
+                        months: m.month_hashes.len(),
+                        tracks: m.tracks,
+                        from_version: m.from_version,
+                        exported_at: m.exported_at,
+                    });
+                }
+            }
+        }
+        out.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
+        out
+    }
+
+    pub fn remove_synced_peer(&self, device_id: &str) -> Result<bool> {
+        let safe_id = sanitize_peer_id(device_id);
+        let peers_root = self.peers_dir();
+        let peer_dir = peers_root.join(&safe_id);
+        let manifest_path = peers_root.join(format!("{safe_id}.manifest.json"));
+        let mut removed = false;
+        if peer_dir.exists() {
+            fs::remove_dir_all(&peer_dir)?;
+            removed = true;
+        }
+        if manifest_path.exists() {
+            fs::remove_file(&manifest_path)?;
+            removed = true;
+        }
+        Ok(removed)
+    }
+
+    fn peers_dir(&self) -> PathBuf {
+        self.dir.join("peers")
+    }
+
+    fn all_months_including_peers(&self) -> Vec<String> {
+        let mut set: BTreeSet<String> = self.months().into_iter().collect();
+        if let Ok(peer_entries) = fs::read_dir(self.peers_dir()) {
+            for peer_entry in peer_entries.flatten() {
+                let path = peer_entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                if let Ok(month_entries) = fs::read_dir(&path) {
+                    for month_entry in month_entries.flatten() {
+                        let name = month_entry.file_name().to_string_lossy().to_string();
+                        if let Some(stem) = name.strip_suffix(".json") {
+                            if parse_year_month(stem).is_some() {
+                                set.insert(stem.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        set.into_iter().collect()
+    }
+
+    fn buckets_for_month(&self, month_key: &str) -> Vec<StoredBucket> {
+        let mut out = Vec::new();
+        if let Some(local) = self.read_bucket(month_key) {
+            out.push(local);
+        }
+        if let Ok(peer_entries) = fs::read_dir(self.peers_dir()) {
+            let mut peer_dirs: Vec<PathBuf> = peer_entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect();
+            peer_dirs.sort();
+            for dir in peer_dirs {
+                let file = dir.join(format!("{month_key}.json"));
+                if let Ok(content) = fs::read_to_string(file) {
+                    if let Ok(bucket) = serde_json::from_str::<StoredBucket>(&content) {
+                        out.push(bucket);
+                    }
+                }
+            }
+        }
+        out
     }
 
     pub fn months(&self) -> Vec<String> {
@@ -1113,6 +1282,181 @@ impl ListeningStatsStore {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerDeviceSummary {
+    pub device_id: String,
+    pub device_name: String,
+    pub updated_at_ms: i64,
+    pub months: usize,
+    pub tracks: usize,
+    pub from_version: String,
+    pub exported_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerSyncResult {
+    pub device_id: String,
+    pub device_name: String,
+    pub months: usize,
+    pub tracks: usize,
+    pub from_version: String,
+    pub exported_at: String,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PeerManifest {
+    device_id: String,
+    device_name: String,
+    updated_at_ms: i64,
+    from_version: String,
+    exported_at: String,
+    tracks: usize,
+    month_hashes: BTreeMap<String, String>,
+}
+
+fn now_unix_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn sanitize_peer_id(raw: &str) -> String {
+    let mut out: String = raw
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else if c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    while out.contains("--") {
+        out = out.replace("--", "-");
+    }
+    let trimmed = out.trim_matches(['-', '_']);
+    if trimmed.is_empty() {
+        "mobile-device".to_string()
+    } else {
+        trimmed.chars().take(48).collect()
+    }
+}
+
+fn parse_backup_payload(raw: &str) -> Result<(Vec<StoredBucket>, String, String)> {
+    let trimmed = raw.trim();
+    let (buckets, from_version, exported_at) = if trimmed.starts_with('[') {
+        let list: Vec<StoredBucket> =
+            serde_json::from_str(trimmed).context("That file is not a valid listening array")?;
+        (list, "buckets".to_string(), String::new())
+    } else {
+        let parsed: Value = serde_json::from_str(trimmed)
+            .context("That file does not look like a BitChord backup")?;
+        if parsed.get("month").is_some() && parsed.get("tracks").is_some() {
+            let single: StoredBucket = serde_json::from_value(parsed)
+                .context("Could not parse single listening month file")?;
+            (vec![single], "month-bucket".to_string(), String::new())
+        } else {
+            let file: BackupFile = serde_json::from_value(parsed)
+                .context("That file does not look like a BitChord backup")?;
+            if file.app != "bitchord" {
+                bail!("That backup is from another app ({})", file.app);
+            }
+            if file.version > 1 {
+                bail!(
+                    "That backup was written by a newer schema version ({})",
+                    file.version
+                );
+            }
+            (file.listening, file.version_name, file.exported_at)
+        }
+    };
+
+    let valid_buckets: Vec<StoredBucket> = buckets
+        .into_iter()
+        .filter(|b| parse_year_month(&b.month).is_some())
+        .collect();
+    if valid_buckets.is_empty() {
+        bail!("No valid YYYY-MM listening months found in that backup file");
+    }
+    Ok((valid_buckets, from_version, exported_at))
+}
+
+fn merge_stored_buckets(month_key: &str, buckets: Vec<StoredBucket>) -> Option<StoredBucket> {
+    if buckets.is_empty() {
+        return None;
+    }
+    let mut tracks: HashMap<String, TrackEntry> = HashMap::new();
+    let mut artists: HashMap<String, NameEntry> = HashMap::new();
+    let mut albums: HashMap<String, NameEntry> = HashMap::new();
+    let mut hours = vec![0i64; 24];
+    let mut days: HashMap<i32, i64> = HashMap::new();
+
+    for bucket in buckets {
+        for entry in bucket.tracks {
+            let k = merge_key(&entry);
+            tracks
+                .entry(k)
+                .and_modify(|existing| existing.absorb(&entry))
+                .or_insert(entry);
+        }
+        for mut entry in bucket.artists {
+            if let Some(lead) = primary_artist(&entry.name) {
+                entry.name = lead;
+            }
+            let k = entry.name.to_lowercase();
+            artists
+                .entry(k)
+                .and_modify(|existing| existing.absorb(&entry))
+                .or_insert(entry);
+        }
+        for entry in bucket.albums {
+            let k = album_key(
+                entry.id.as_deref(),
+                &entry.name,
+                entry.sub.as_deref().unwrap_or(""),
+            );
+            albums
+                .entry(k)
+                .and_modify(|existing| existing.absorb(&entry))
+                .or_insert(entry);
+        }
+        for (i, h) in bucket.hours.iter().take(24).enumerate() {
+            hours[i] += *h;
+        }
+        for (day_num, ms) in bucket.days {
+            *days.entry(day_num).or_default() += ms;
+        }
+    }
+
+    let mut track_list: Vec<TrackEntry> = tracks.into_values().collect();
+    track_list.sort_by(|a, b| b.ms.cmp(&a.ms).then_with(|| b.plays.cmp(&a.plays)));
+    let mut artist_list: Vec<NameEntry> = artists.into_values().collect();
+    artist_list.sort_by(|a, b| b.ms.cmp(&a.ms).then_with(|| b.plays.cmp(&a.plays)));
+    let mut album_list: Vec<NameEntry> = albums.into_values().collect();
+    album_list.sort_by(|a, b| b.ms.cmp(&a.ms).then_with(|| b.plays.cmp(&a.plays)));
+
+    Some(StoredBucket {
+        version: 1,
+        month: month_key.to_string(),
+        tracks: track_list,
+        artists: artist_list,
+        albums: album_list,
+        hours,
+        days,
+        track_days: None,
+        artist_days: None,
+        album_days: None,
+    })
 }
 
 pub fn parse_year_month(raw: &str) -> Option<(i32, u32)> {
@@ -1337,5 +1681,114 @@ mod tests {
         let store2 = temp_store("backup_roundtrip");
         let res2 = store2.import_backup_json(&exported).unwrap();
         assert_eq!(res2.months, 1);
+    }
+
+    #[test]
+    fn peer_merge_preserves_local_stats_is_idempotent_and_exports_combined() {
+        let store = temp_store("peer_merge");
+        let local_json = r#"{
+            "app": "bitchord",
+            "version": 1,
+            "versionName": "0.8.0",
+            "exportedAt": "2026-11-22T10:00:00Z",
+            "settings": {},
+            "listening": [
+                {
+                    "v": 1,
+                    "month": "2026-11",
+                    "tracks": [
+                        {
+                            "id": "pc1",
+                            "title": "Desktop Track",
+                            "artist": "PC Artist",
+                            "ms": 180000,
+                            "plays": 2,
+                            "days": { "2026-11-22": { "ms": 180000, "plays": 2 } }
+                        }
+                    ],
+                    "artists": [
+                        {
+                            "name": "PC Artist",
+                            "ms": 180000,
+                            "plays": 2,
+                            "days": { "2026-11-22": { "ms": 180000, "plays": 2 } }
+                        }
+                    ],
+                    "albums": [],
+                    "hours": [0,0,0,0,0,0,0,0,0,0,180000,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                    "days": { "22": 180000 }
+                }
+            ]
+        }"#;
+        let phone_json = r#"{
+            "app": "bitchord",
+            "version": 1,
+            "versionName": "0.8.0-android",
+            "exportedAt": "2026-11-22T12:00:00Z",
+            "settings": {},
+            "listening": [
+                {
+                    "v": 1,
+                    "month": "2026-11",
+                    "tracks": [
+                        {
+                            "id": "mob1",
+                            "title": "Mobile Track",
+                            "artist": "Phone Artist",
+                            "ms": 240000,
+                            "plays": 3,
+                            "days": { "2026-11-22": { "ms": 240000, "plays": 3 } }
+                        }
+                    ],
+                    "artists": [
+                        {
+                            "name": "Phone Artist",
+                            "ms": 240000,
+                            "plays": 3,
+                            "days": { "2026-11-22": { "ms": 240000, "plays": 3 } }
+                        }
+                    ],
+                    "albums": [],
+                    "hours": [0,0,0,0,0,0,0,0,0,0,0,0,240000,0,0,0,0,0,0,0,0,0,0,0],
+                    "days": { "22": 240000 }
+                }
+            ]
+        }"#;
+
+        store.import_backup_json(local_json).unwrap();
+        let sync1 = store
+            .merge_peer_backup_json(Some("pixel-9"), Some("Pixel 9"), phone_json)
+            .unwrap();
+        assert_eq!(sync1.device_id, "pixel-9");
+        assert_eq!(sync1.months, 1);
+
+        // Re-syncing the exact same phone replaces only its partition (no double counting).
+        store
+            .merge_peer_backup_json(Some("pixel-9"), Some("Pixel 9"), phone_json)
+            .unwrap();
+
+        let today = NaiveDate::from_ymd_opt(2026, 11, 22).unwrap();
+        let summary = store.summary_at(ReplayPeriod::AllTime, today).unwrap();
+        assert_eq!(summary.total_plays, 5);
+        assert_eq!(summary.total_ms, 420_000);
+        assert_eq!(summary.distinct_songs, 2);
+
+        let peers = store.list_synced_peers();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].device_name, "Pixel 9");
+
+        // Combined export carries both PC + phone tracks for importing back on Android.
+        let combined = store.export_combined_backup_json().unwrap();
+        let fresh = temp_store("peer_combined_import");
+        fresh.import_backup_json(&combined).unwrap();
+        let fresh_sum = fresh.summary_at(ReplayPeriod::AllTime, today).unwrap();
+        assert_eq!(fresh_sum.total_plays, 5);
+        assert_eq!(fresh_sum.distinct_songs, 2);
+
+        // Removing peer leaves local PC stats intact.
+        assert!(store.remove_synced_peer("pixel-9").unwrap());
+        let after_remove = store.summary_at(ReplayPeriod::AllTime, today).unwrap();
+        assert_eq!(after_remove.total_plays, 2);
+        assert_eq!(after_remove.total_ms, 180_000);
     }
 }

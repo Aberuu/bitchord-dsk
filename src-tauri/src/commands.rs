@@ -1,12 +1,13 @@
 use crate::auth_windows::{open_discord_login, open_spotify_login, open_youtube_login};
-use crate::{tray, AppState};
+use crate::updater::{self, UpdateCheckResult, UpdaterPrefsPayload};
+use crate::{shutdown_and_exit, tray, AppState};
 use base64::Engine;
-use core_auth::{app_data_dir, DesktopPrefs, StoredAddonConfig, YtFetchParams};
+use core_auth::{app_data_dir, StoredAddonConfig, YtFetchParams};
 use core_downloads::{DownloadRequest, DownloadedTrack, LocalTrack};
 use core_integrations::{
     CastDevice, CastLoadRequest, CastSessionState, CastSupportStatus, DiscordNowPlaying,
-    DiscordPresenceOptions, LastFmTokenAuth, ScrobbleConfigUpdate, ScrobbleState, ScrobbleTrack,
-    SmtcMetadata, SmtcPlayback,
+    DiscordPresenceOptions, LastFmTokenAuth, MobileNowPlaying, MobileSyncStatus,
+    ScrobbleConfigUpdate, ScrobbleState, ScrobbleTrack, SmtcMetadata, SmtcPlayback,
 };
 use core_lyrics::HttpRequestParams;
 use core_playback::{
@@ -17,7 +18,8 @@ use core_sources::{
     SourceCandidateTrack, SourcesSnapshot,
 };
 use core_stats::{
-    save_file_bytes, BackupSummary, ListeningSampleInput, ReplayPeriod, ReplaySummary,
+    save_file_bytes, BackupSummary, ListeningSampleInput, PeerDeviceSummary, PeerSyncResult,
+    ReplayPeriod, ReplaySummary,
 };
 use directories::UserDirs;
 use serde::{Deserialize, Serialize};
@@ -76,22 +78,13 @@ pub struct DesktopBootstrap {
     pub version: String,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UpdateCheckResult {
-    pub status: String,
-    pub current_version: String,
-    pub latest_version: Option<String>,
-    pub notes: Option<String>,
-}
-
 #[tauri::command]
 pub fn get_desktop_bootstrap(state: State<'_, AppState>) -> DesktopBootstrap {
     DesktopBootstrap {
         proxy_base_url: state.proxy.base_url().to_string(),
         audio_tap_url: state.audio_tap_url.clone(),
         vibrancy_mode: state.vibrancy_mode.lock().clone(),
-        minimize_to_tray: *state.minimize_to_tray.lock(),
+        minimize_to_tray: state.prefs.lock().minimize_to_tray,
         version: env!("CARGO_PKG_VERSION").to_string(),
     }
 }
@@ -102,12 +95,14 @@ pub fn set_minimize_to_tray(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
-    *state.minimize_to_tray.lock() = enabled;
-    DesktopPrefs {
-        minimize_to_tray: enabled,
-    }
-    .save_to(&state.prefs_path)
-    .map_err(|e| format!("Failed to persist tray preference: {e}"))?;
+    let snapshot = {
+        let mut prefs = state.prefs.lock();
+        prefs.minimize_to_tray = enabled;
+        prefs.clone()
+    };
+    snapshot
+        .save_to(&state.prefs_path)
+        .map_err(|e| format!("Failed to persist tray preference: {e}"))?;
     tray::sync_tray(&app, enabled).map_err(|e| format!("Failed to sync system tray: {e}"))?;
     Ok(enabled)
 }
@@ -296,6 +291,17 @@ pub async fn sign_out_yt(app: AppHandle, state: State<'_, AppState>) -> Result<(
 
 #[tauri::command]
 pub fn smtc_update_metadata(meta: SmtcMetadata, state: State<'_, AppState>) {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    state.mobile_sync.update_now_playing(Some(MobileNowPlaying {
+        title: meta.title.clone(),
+        artist: meta.artist.clone().unwrap_or_default(),
+        album: meta.album.clone(),
+        status: "playing".to_string(),
+        updated_at_ms: now_ms,
+    }));
     if let Some(smtc) = state.smtc.lock().as_ref() {
         smtc.update_metadata(meta);
     }
@@ -303,6 +309,9 @@ pub fn smtc_update_metadata(meta: SmtcMetadata, state: State<'_, AppState>) {
 
 #[tauri::command]
 pub fn smtc_update_playback(playback: SmtcPlayback, state: State<'_, AppState>) {
+    if playback.status.eq_ignore_ascii_case("stopped") {
+        state.mobile_sync.update_now_playing(None);
+    }
     if let Some(smtc) = state.smtc.lock().as_ref() {
         smtc.update_playback(playback);
     }
@@ -575,44 +584,132 @@ pub async fn audio_open_asio_control_panel(
 }
 
 #[tauri::command]
-pub async fn check_for_updates(app: AppHandle) -> Result<UpdateCheckResult, String> {
-    let current = env!("CARGO_PKG_VERSION").to_string();
-    #[cfg(feature = "updater")]
-    {
-        use tauri_plugin_updater::UpdaterExt;
-        if let Ok(updater) = app.updater() {
-            return match updater.check().await {
-                Ok(Some(update)) => Ok(UpdateCheckResult {
-                    status: "available".into(),
-                    current_version: current,
-                    latest_version: Some(update.version),
-                    notes: update.body,
-                }),
-                Ok(None) => Ok(UpdateCheckResult {
-                    status: "up_to_date".into(),
-                    current_version: current,
-                    latest_version: None,
-                    notes: None,
-                }),
-                Err(err) => Ok(UpdateCheckResult {
-                    status: "unconfigured".into(),
-                    current_version: current,
-                    latest_version: None,
-                    notes: Some(err.to_string()),
-                }),
+pub fn updater_get_prefs(state: State<'_, AppState>) -> UpdaterPrefsPayload {
+    UpdaterPrefsPayload::from(&*state.prefs.lock())
+}
+
+#[tauri::command]
+pub fn updater_set_prefs(
+    auto_check_updates: Option<bool>,
+    auto_download_updates: Option<bool>,
+    update_feed_url: Option<String>,
+    skipped_version: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<UpdaterPrefsPayload, String> {
+    let snapshot = {
+        let mut prefs = state.prefs.lock();
+        if let Some(v) = auto_check_updates {
+            prefs.auto_check_updates = v;
+        }
+        if let Some(v) = auto_download_updates {
+            prefs.auto_download_updates = v;
+        }
+        if let Some(feed) = update_feed_url {
+            let trimmed = feed.trim();
+            prefs.update_feed_url = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
             };
         }
+        if let Some(ver) = skipped_version {
+            let trimmed = ver.trim();
+            prefs.skipped_version = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
+        }
+        prefs.clone()
+    };
+    snapshot
+        .save_to(&state.prefs_path)
+        .map_err(|e| format!("Failed to save updater preferences: {e}"))?;
+    Ok(UpdaterPrefsPayload::from(&snapshot))
+}
+
+#[tauri::command]
+pub async fn check_for_updates(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<UpdateCheckResult, String> {
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    let feed_url = state.prefs.lock().update_feed_url.clone();
+
+    #[cfg(feature = "updater")]
+    {
+        if feed_url.is_none() {
+            use tauri_plugin_updater::UpdaterExt;
+            if let Ok(tauri_updater) = app.updater() {
+                if let Ok(Some(update)) = tauri_updater.check().await {
+                    let single = vec![updater::ReleaseItem {
+                        tag_name: update.version.clone(),
+                        draft: false,
+                        prerelease: update.version.contains('-'),
+                        html_url: Some(updater::DEFAULT_RELEASE_PAGE_URL.into()),
+                        body: update.body.clone(),
+                        assets: Vec::new(),
+                    }];
+                    let mut evaluated = updater::evaluate_releases(&current, &single, None);
+                    evaluated.max_major_patch_lag = updater::MAX_MAJOR_PATCH_LAG;
+                    return Ok(evaluated);
+                }
+            }
+        }
     }
+
     let _ = app;
-    Ok(UpdateCheckResult {
-        status: "unconfigured".into(),
-        current_version: current,
-        latest_version: None,
-        notes: Some(
-            "Configure a signed GitHub Releases manifest URL and minisign public key, then build with --features updater."
-                .into(),
-        ),
-    })
+    Ok(updater::fetch_releases_and_evaluate(
+        &state.http,
+        &current,
+        feed_url.as_deref(),
+    )
+    .await)
+}
+
+#[tauri::command]
+pub async fn download_update(
+    installer_url: String,
+    file_name: Option<String>,
+    expected_sha256: Option<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let http = state.http.clone();
+    let app_progress = app.clone();
+    let path = updater::download_installer(
+        &http,
+        &installer_url,
+        file_name.as_deref(),
+        expected_sha256.as_deref(),
+        move |progress| {
+            let _ = app_progress.emit("updater://progress", &progress);
+        },
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn install_update(downloaded_path: String, app: AppHandle) -> Result<(), String> {
+    let path = PathBuf::from(&downloaded_path);
+    updater::launch_downloaded_installer(&path).map_err(|e| e.to_string())?;
+    let exit_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(450)).await;
+        shutdown_and_exit(&exit_handle).await;
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn exit_app(app: AppHandle) -> Result<(), String> {
+    let exit_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        shutdown_and_exit(&exit_handle).await;
+    });
+    Ok(())
 }
 
 #[tauri::command]
@@ -651,6 +748,14 @@ pub fn stats_export_backup(state: State<'_, AppState>) -> Result<String, String>
 }
 
 #[tauri::command]
+pub fn stats_export_combined_backup(state: State<'_, AppState>) -> Result<String, String> {
+    state
+        .stats
+        .export_combined_backup_json()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn stats_import_backup(
     raw_json: String,
     app: AppHandle,
@@ -662,6 +767,84 @@ pub fn stats_import_backup(
         .map_err(|e| e.to_string())?;
     let _ = app.emit("stats://updated", json!({}));
     Ok(summary)
+}
+
+#[tauri::command]
+pub fn stats_merge_peer_backup(
+    raw_json: String,
+    device_id: Option<String>,
+    device_name: Option<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<PeerSyncResult, String> {
+    let summary = state
+        .stats
+        .merge_peer_backup_json(device_id.as_deref(), device_name.as_deref(), &raw_json)
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("stats://updated", json!({}));
+    let _ = app.emit("mobile-sync://updated", &summary);
+    Ok(summary)
+}
+
+#[tauri::command]
+pub fn stats_list_synced_peers(state: State<'_, AppState>) -> Vec<PeerDeviceSummary> {
+    state.stats.list_synced_peers()
+}
+
+#[tauri::command]
+pub fn stats_remove_synced_peer(
+    device_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let removed = state
+        .stats
+        .remove_synced_peer(&device_id)
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("stats://updated", json!({}));
+    Ok(removed)
+}
+
+#[tauri::command]
+pub fn mobile_sync_status(state: State<'_, AppState>) -> MobileSyncStatus {
+    state.mobile_sync.status()
+}
+
+#[tauri::command]
+pub async fn mobile_sync_start_server(
+    state: State<'_, AppState>,
+) -> Result<MobileSyncStatus, String> {
+    let preferred_port = state.prefs.lock().mobile_sync_port;
+    let status = state
+        .mobile_sync
+        .start(preferred_port)
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Some(bound_port) = status.port {
+        let snapshot = {
+            let mut prefs = state.prefs.lock();
+            if prefs.mobile_sync_port != Some(bound_port) {
+                prefs.mobile_sync_port = Some(bound_port);
+                Some(prefs.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(snap) = snapshot {
+            let _ = snap.save_to(&state.prefs_path);
+        }
+    }
+    Ok(status)
+}
+
+#[tauri::command]
+pub fn mobile_sync_stop_server(state: State<'_, AppState>) -> MobileSyncStatus {
+    state.mobile_sync.stop()
+}
+
+#[tauri::command]
+pub fn mobile_sync_rotate_pin(state: State<'_, AppState>) -> MobileSyncStatus {
+    state.mobile_sync.rotate_pin()
 }
 
 #[tauri::command]

@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { ChevronRight, Clock, Cloud, Download, FileMusic, HardDrive, ImageDown, Play, Upload } from 'lucide-react';
+import { ChevronRight, Clock, Cloud, Download, FileMusic, HardDrive, ImageDown, Play, Smartphone, Upload } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { SiSpotify } from 'react-icons/si';
 import { useNavigate, useSearchParams } from 'react-router';
@@ -173,6 +173,7 @@ export default function LibraryOverviewPage() {
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [posterBusy, setPosterBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const mergeFileInputRef = useRef<HTMLInputElement>(null);
 
   const songsRef = useRef<HTMLElement>(null);
   const artistsRef = useRef<HTMLElement>(null);
@@ -250,6 +251,24 @@ export default function LibraryOverviewPage() {
     },
   });
 
+  const mergePeerMutation = useMutation({
+    mutationFn: ({ rawJson, deviceName }: { rawJson: string; deviceName: string }) =>
+      statsApi.mergePeerBackupJson(rawJson, null, deviceName),
+    onSuccess: (res) => {
+      void queryClient.invalidateQueries({ queryKey: ['desktop', 'stats'] });
+      setFeedback({
+        kind: 'ok',
+        text: `Merged ${res.months} month${res.months === 1 ? '' : 's'} (${res.tracks} tracked entries) from ${res.deviceName} without overwriting PC history.`,
+      });
+    },
+    onError: (err) => {
+      setFeedback({
+        kind: 'err',
+        text: err instanceof Error ? err.message : String(err),
+      });
+    },
+  });
+
   const exportBackupMutation = useMutation({
     mutationFn: async () => {
       const jsonStr = await statsApi.exportBackupJson();
@@ -273,6 +292,10 @@ export default function LibraryOverviewPage() {
 
   const triggerImport = () => {
     fileInputRef.current?.click();
+  };
+
+  const triggerMergePhone = () => {
+    mergeFileInputRef.current?.click();
   };
 
   const handleSavePoster = async () => {
@@ -347,6 +370,15 @@ export default function LibraryOverviewPage() {
         <div className="mb-3 flex flex-wrap items-center gap-2 pl-(--body-gutter) sm:pl-0">
           <button
             type="button"
+            onClick={triggerMergePhone}
+            disabled={mergePeerMutation.isPending}
+            className="inline-flex items-center gap-1.5 rounded-pill bg-quaternary px-3.5 py-1.5 type-callout-emphasized text-primary transition-colors hover:bg-quinary disabled:opacity-50"
+          >
+            <Smartphone size={13} aria-hidden="true" />
+            {mergePeerMutation.isPending ? 'Merging...' : 'Merge Phone Backup'}
+          </button>
+          <button
+            type="button"
             onClick={triggerImport}
             disabled={importMutation.isPending}
             className="inline-flex items-center gap-1.5 rounded-pill bg-quaternary px-3.5 py-1.5 type-callout-emphasized text-primary transition-colors hover:bg-quinary disabled:opacity-50"
@@ -386,6 +418,20 @@ export default function LibraryOverviewPage() {
           ev.currentTarget.value = '';
           if (!file) return;
           void file.text().then((raw) => importMutation.mutate(raw));
+        }}
+      />
+      <input
+        ref={mergeFileInputRef}
+        type="file"
+        accept=".json,application/json"
+        className="hidden"
+        aria-label="Merge mobile BitChord backup JSON"
+        onChange={(ev) => {
+          const file = ev.currentTarget.files?.[0];
+          ev.currentTarget.value = '';
+          if (!file) return;
+          const inferredName = file.name.replace(/\.json$/i, '').replace(/^bitchord-backup-?/i, '').trim() || 'Android Phone';
+          void file.text().then((raw) => mergePeerMutation.mutate({ rawJson: raw, deviceName: inferredName }));
         }}
       />
 

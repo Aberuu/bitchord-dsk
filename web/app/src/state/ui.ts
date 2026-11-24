@@ -18,6 +18,10 @@ interface UiState {
   setAudioPipelineOpen: (open: boolean) => void;
   castModalOpen: boolean;
   setCastModalOpen: (open: boolean) => void;
+  shortcutsOpen: boolean;
+  setShortcutsOpen: (open: boolean) => void;
+  mandatoryUpdateLocked: boolean;
+  setMandatoryUpdateLocked: (locked: boolean) => void;
   drawerOpen: boolean;
   setDrawerOpen: (open: boolean) => void;
   sidebarCompact: boolean;
@@ -66,6 +70,10 @@ export const useUi = create<UiState>()((set) => ({
   setAudioPipelineOpen: (audioPipelineOpen) => set({ audioPipelineOpen }),
   castModalOpen: false,
   setCastModalOpen: (castModalOpen) => set({ castModalOpen }),
+  shortcutsOpen: false,
+  setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
+  mandatoryUpdateLocked: false,
+  setMandatoryUpdateLocked: (mandatoryUpdateLocked) => set({ mandatoryUpdateLocked }),
   drawerOpen: false,
   setDrawerOpen: (drawerOpen) => set({ drawerOpen }),
   sidebarCompact: readSidebarCompact(),

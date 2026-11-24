@@ -987,7 +987,9 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
       const currentSec = head?.sec ?? nativePlayhead?.positionSec ?? 0;
       const durSec = nativePlayhead?.durationSec ?? nowPlaying.durationSec;
       const activeRate = bitPerfectBypassActive() ? 1 : get().playbackRate;
-      if (status === 'playing') {
+      const resuming = status !== 'playing';
+      if (partyHooks?.onLockedTransport(resuming)) return;
+      if (!resuming) {
         cancelQualityUpgrade();
         void desktopApi.audioPause().catch(() => {});
         set({
@@ -1002,18 +1004,20 @@ export const usePlayer = create<PlayerState>()((set, get) => ({
           },
         });
       } else {
-        void desktopApi.audioResume().catch(() => {});
-        set({
-          status: 'playing',
-          nativePlayhead: {
-            trackId: nowPlaying.videoId,
-            positionSec: currentSec,
-            durationSec: durSec,
-            playbackRate: activeRate,
-            updatedAtMs: performance.now(),
-            paused: false,
-          },
-        });
+        if (!partyHooks?.shouldDeferPlay()) {
+          void desktopApi.audioResume().catch(() => {});
+          set({
+            status: 'playing',
+            nativePlayhead: {
+              trackId: nowPlaying.videoId,
+              positionSec: currentSec,
+              durationSec: durSec,
+              playbackRate: activeRate,
+              updatedAtMs: performance.now(),
+              paused: false,
+            },
+          });
+        }
       }
       intent();
       return;
@@ -2576,10 +2580,61 @@ export const partyPlayer = {
     return startAt(index, { startSec, autoplay: play });
   },
   play(): void {
+    const state = usePlayer.getState();
+    if (castHooks?.isConnected()) {
+      castHooks.play();
+      usePlayer.setState({ status: 'playing' });
+      return;
+    }
+    if (state.nativeActive) {
+      const head = getPlayhead();
+      const currentSec = head?.sec ?? state.nativePlayhead?.positionSec ?? 0;
+      const durSec = state.nativePlayhead?.durationSec ?? state.nowPlaying?.durationSec ?? 0;
+      const activeRate = bitPerfectBypassActive() ? 1 : state.playbackRate;
+      void desktopApi.audioResume().catch((e: unknown) => trackLog.w(`party native resume failed: ${String(e)}`));
+      usePlayer.setState({
+        status: 'playing',
+        nativePlayhead: {
+          trackId: state.nowPlaying?.videoId ?? state.nativePlayhead?.trackId ?? null,
+          positionSec: currentSec,
+          durationSec: durSec,
+          playbackRate: activeRate,
+          updatedAtMs: performance.now(),
+          paused: false,
+        },
+      });
+      return;
+    }
     const audio = getAudio();
     if (audio?.paused) void audio.play().catch((e: unknown) => trackLog.w(`party play() refused: ${String(e)}`));
   },
   pause(): void {
+    const state = usePlayer.getState();
+    if (castHooks?.isConnected()) {
+      castHooks.pause();
+      usePlayer.setState({ status: 'paused' });
+      return;
+    }
+    if (state.nativeActive) {
+      cancelQualityUpgrade();
+      const head = getPlayhead();
+      const currentSec = head?.sec ?? state.nativePlayhead?.positionSec ?? 0;
+      const durSec = state.nativePlayhead?.durationSec ?? state.nowPlaying?.durationSec ?? 0;
+      const activeRate = bitPerfectBypassActive() ? 1 : state.playbackRate;
+      void desktopApi.audioPause().catch(() => {});
+      usePlayer.setState({
+        status: 'paused',
+        nativePlayhead: {
+          trackId: state.nowPlaying?.videoId ?? state.nativePlayhead?.trackId ?? null,
+          positionSec: currentSec,
+          durationSec: durSec,
+          playbackRate: activeRate,
+          updatedAtMs: performance.now(),
+          paused: true,
+        },
+      });
+      return;
+    }
     const audio = getAudio();
     if (audio && !audio.paused) {
       cancelCrossfade();
@@ -2587,10 +2642,33 @@ export const partyPlayer = {
     }
   },
   seekTo(seconds: number): void {
+    const state = usePlayer.getState();
+    const clamped = Math.max(0, seconds);
+    if (castHooks?.isConnected()) {
+      castHooks.seek(clamped);
+      return;
+    }
+    if (state.nativeActive) {
+      cancelQualityUpgrade();
+      const durSec = state.nativePlayhead?.durationSec ?? state.nowPlaying?.durationSec ?? clamped;
+      const bounded = durSec > 0 ? Math.min(clamped, durSec) : clamped;
+      void desktopApi.audioSeek(bounded).catch(() => {});
+      usePlayer.setState({
+        nativePlayhead: {
+          trackId: state.nowPlaying?.videoId ?? state.nativePlayhead?.trackId ?? null,
+          positionSec: bounded,
+          durationSec: durSec,
+          playbackRate: bitPerfectBypassActive() ? 1 : state.playbackRate,
+          updatedAtMs: performance.now(),
+          paused: state.status !== 'playing',
+        },
+      });
+      return;
+    }
     const audio = getAudio();
     if (!audio) return;
     cancelCrossfade();
-    audio.currentTime = Math.max(0, seconds);
+    audio.currentTime = clamped;
     updatePositionState();
   },
   /** Replaces everything after the playing track; the playing track is left alone. */
