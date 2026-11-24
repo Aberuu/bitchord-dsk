@@ -1,0 +1,87 @@
+name: Release BitChord Desktop
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release version tag (for example v0.9.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Resolve release version from tag
+        id: meta
+        shell: pwsh
+        run: |
+          $tag = if ("${{ github.event.inputs.tag }}" -ne "") { "${{ github.event.inputs.tag }}" } else { "${{ github.ref_name }}" }
+          $ver = $tag.TrimStart('v', 'V')
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+          # Keep workspace Cargo.toml and tauri.conf.json aligned with the pushed release tag
+          (Get-Content Cargo.toml -Raw) -replace '(?m)^version\s*=\s*"[^"]+"', "version = `"$ver`"" | Set-Content Cargo.toml -NoNewline
+          $conf = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $conf.version = $ver
+          $conf | ConvertTo-Json -Depth 20 | Set-Content src-tauri/tauri.conf.json
+
+      - name: Install web dependencies & build frontend
+        run: |
+          pnpm --dir web install --frozen-lockfile
+          pnpm --dir web --filter @bitchord/app run typecheck
+          pnpm --dir web --filter @bitchord/app run build
+
+      - name: Run Rust workspace unit tests
+        run: cargo test --workspace --lib --bins --exclude bitchord-desktop
+
+      - name: Build Tauri bundles (NSIS / MSI) and standalone portable executable
+        run: |
+          cargo install tauri-cli --version "^2" --locked
+          cargo tauri build
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          Copy-Item "target/release/bitchord-desktop.exe" "release-assets/BitChord-${{ steps.meta.outputs.version }}-win-x64.exe"
+          Get-ChildItem -Path "target/release/bundle" -Recurse -Include *.exe,*.msi | ForEach-Object {
+            Copy-Item $_.FullName "release-assets/$($_.Name)"
+          }
+          Push-Location release-assets
+          Get-ChildItem -File | Sort-Object Name | ForEach-Object {
+            $h = (Get-FileHash $_.Name -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$h  $($_.Name)"
+          } | Set-Content SHA256SUMS.txt
+          Pop-Location
+        shell: pwsh
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: BitChord ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          files: release-assets/*

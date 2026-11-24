@@ -1,7 +1,8 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Copy, Minus, Square, X } from 'lucide-react';
+import { ArrowUpCircle, Copy, Minus, Square, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { isTauriDesktop } from '@/desktop/tauriBridge';
+import { useUi } from '@/state/ui';
 import { SidebarToggleButton } from './SidebarToggleButton';
 
 const captionBtn =
@@ -10,6 +11,9 @@ const captionBtn =
 export function TitleBar() {
   const [maximized, setMaximized] = useState(false);
   const desktop = isTauriDesktop();
+  const hasPendingUpdate = useUi((s) => s.hasPendingUpdate);
+  const updateModalOpen = useUi((s) => s.updateModalOpen);
+  const setUpdateModalOpen = useUi((s) => s.setUpdateModalOpen);
 
   useEffect(() => {
     if (!desktop) return;
@@ -46,6 +50,18 @@ export function TitleBar() {
       </div>
       <div className="h-full flex-1" data-tauri-drag-region onDoubleClick={() => void win.toggleMaximize()} />
       <div className="flex h-full flex-none items-center">
+        {hasPendingUpdate && !updateModalOpen && (
+          <button
+            type="button"
+            className="mr-1 inline-flex h-6 items-center gap-1 rounded-pill bg-key/18 px-2.5 text-[11px] font-semibold text-key transition-colors hover:bg-key/28 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-key"
+            aria-label="Open Software Update"
+            title="Software Update available"
+            onClick={() => setUpdateModalOpen(true)}
+          >
+            <ArrowUpCircle size={12} aria-hidden="true" />
+            Update
+          </button>
+        )}
         <button
           type="button"
           className={captionBtn}

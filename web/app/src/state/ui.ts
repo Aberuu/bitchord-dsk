@@ -20,6 +20,10 @@ interface UiState {
   setCastModalOpen: (open: boolean) => void;
   shortcutsOpen: boolean;
   setShortcutsOpen: (open: boolean) => void;
+  updateModalOpen: boolean;
+  setUpdateModalOpen: (open: boolean) => void;
+  hasPendingUpdate: boolean;
+  setHasPendingUpdate: (pending: boolean) => void;
   mandatoryUpdateLocked: boolean;
   setMandatoryUpdateLocked: (locked: boolean) => void;
   drawerOpen: boolean;
@@ -72,6 +76,10 @@ export const useUi = create<UiState>()((set) => ({
   setCastModalOpen: (castModalOpen) => set({ castModalOpen }),
   shortcutsOpen: false,
   setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
+  updateModalOpen: false,
+  setUpdateModalOpen: (updateModalOpen) => set({ updateModalOpen }),
+  hasPendingUpdate: false,
+  setHasPendingUpdate: (hasPendingUpdate) => set({ hasPendingUpdate }),
   mandatoryUpdateLocked: false,
   setMandatoryUpdateLocked: (mandatoryUpdateLocked) => set({ mandatoryUpdateLocked }),
   drawerOpen: false,

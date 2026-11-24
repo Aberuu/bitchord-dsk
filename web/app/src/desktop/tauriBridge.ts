@@ -44,7 +44,7 @@ export interface UpdaterPrefs {
 export interface UpdateDownloadProgress {
   receivedBytes: number;
   totalBytes: number | null;
-  phase: 'downloading' | 'verifying' | 'ready' | 'error';
+  phase: 'downloading' | 'verifying' | 'applying' | 'ready' | 'error';
   message: string | null;
 }
 

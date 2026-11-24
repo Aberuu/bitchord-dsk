@@ -694,7 +694,16 @@ pub async fn download_update(
 #[tauri::command]
 pub async fn install_update(downloaded_path: String, app: AppHandle) -> Result<(), String> {
     let path = PathBuf::from(&downloaded_path);
-    updater::launch_downloaded_installer(&path).map_err(|e| e.to_string())?;
+    let _ = app.emit(
+        "updater://progress",
+        &updater::UpdateDownloadProgress {
+            received_bytes: 0,
+            total_bytes: None,
+            phase: "applying".into(),
+            message: Some("Installing update and restarting BitChord...".into()),
+        },
+    );
+    updater::apply_downloaded_update(&path).map_err(|e| e.to_string())?;
     let exit_handle = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(450)).await;

@@ -333,7 +333,24 @@ pub fn parse_release_feed_json(raw: &str) -> Result<Vec<ReleaseItem>> {
     Err(anyhow!("Unrecognized update release feed JSON format"))
 }
 
+pub fn has_uninstaller_sibling() -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let Some(dir) = exe.parent() else {
+        return false;
+    };
+    dir.join("uninstall.exe").is_file() || dir.join("Uninstall.exe").is_file()
+}
+
 pub fn select_windows_installer(assets: &[ReleaseAssetItem]) -> Option<&ReleaseAssetItem> {
+    select_windows_installer_for_mode(assets, has_uninstaller_sibling())
+}
+
+pub fn select_windows_installer_for_mode(
+    assets: &[ReleaseAssetItem],
+    installed_mode: bool,
+) -> Option<&ReleaseAssetItem> {
     let mut ranked: Vec<(i32, &ReleaseAssetItem)> = assets
         .iter()
         .filter_map(|asset| {
@@ -342,18 +359,37 @@ pub fn select_windows_installer(assets: &[ReleaseAssetItem]) -> Option<&ReleaseA
                 return None;
             }
             if lower.ends_with(".exe") {
-                let score = if lower.contains("setup") && lower.contains("x64") {
+                let is_setup = lower.contains("setup") || lower.contains("installer") || lower.contains("nsis");
+                let is_x64 = lower.contains("x64") || lower.contains("win64") || lower.contains("amd64");
+                let score = if installed_mode {
+                    if is_setup && is_x64 {
+                        100
+                    } else if is_setup {
+                        95
+                    } else if is_x64 {
+                        75
+                    } else {
+                        70
+                    }
+                } else if !is_setup && is_x64 {
                     100
-                } else if lower.contains("setup") {
-                    90
-                } else if lower.contains("x64") {
-                    80
+                } else if !is_setup {
+                    95
+                } else if is_x64 {
+                    85
                 } else {
-                    70
+                    80
                 };
                 Some((score, asset))
             } else if lower.ends_with(".msi") {
-                let score = if lower.contains("x64") { 85 } else { 75 };
+                let is_x64 = lower.contains("x64") || lower.contains("amd64");
+                let score = if installed_mode {
+                    if is_x64 { 90 } else { 85 }
+                } else if is_x64 {
+                    75
+                } else {
+                    70
+                };
                 Some((score, asset))
             } else {
                 None
@@ -818,49 +854,150 @@ where
     Ok(final_path)
 }
 
-pub fn launch_downloaded_installer(path: &Path) -> Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateApplyMode {
+    PortableExe,
+    NsisSilent,
+    MsiSilent,
+}
+
+impl UpdateApplyMode {
+    pub fn as_arg(self) -> &'static str {
+        match self {
+            Self::PortableExe => "portable_exe",
+            Self::NsisSilent => "nsis_silent",
+            Self::MsiSilent => "msi_silent",
+        }
+    }
+}
+
+pub fn detect_apply_mode(file_name: &str) -> Result<UpdateApplyMode> {
+    let lower = file_name.trim().to_ascii_lowercase();
+    if lower.ends_with(".msi") {
+        Ok(UpdateApplyMode::MsiSilent)
+    } else if lower.ends_with(".exe") {
+        if lower.contains("setup") || lower.contains("installer") || lower.contains("nsis") {
+            Ok(UpdateApplyMode::NsisSilent)
+        } else {
+            Ok(UpdateApplyMode::PortableExe)
+        }
+    } else {
+        Err(anyhow!(
+            "Update package must be a Windows .exe or .msi binary: {file_name}"
+        ))
+    }
+}
+
+pub fn build_apply_script_ps1() -> &'static str {
+    r#"param(
+  [Parameter(Mandatory=$true)][int]$TargetPid,
+  [Parameter(Mandatory=$true)][string]$SourcePath,
+  [Parameter(Mandatory=$true)][string]$TargetExe,
+  [Parameter(Mandatory=$true)][string]$Mode
+)
+$ErrorActionPreference = 'Stop'
+for ($i = 0; $i -lt 100; $i++) {
+  if (-not (Get-Process -Id $TargetPid -ErrorAction SilentlyContinue)) { break }
+  Start-Sleep -Milliseconds 200
+}
+Start-Sleep -Milliseconds 250
+if ($Mode -eq 'portable_exe') {
+  $backup = "$TargetExe.bak"
+  if (Test-Path -LiteralPath $backup) {
+    Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+  }
+  try {
+    if (Test-Path -LiteralPath $TargetExe) {
+      Move-Item -LiteralPath $TargetExe -Destination $backup -Force
+    }
+    Copy-Item -LiteralPath $SourcePath -Destination $TargetExe -Force
+    Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $SourcePath -Force -ErrorAction SilentlyContinue
+  } catch {
+    if ((Test-Path -LiteralPath $backup) -and -not (Test-Path -LiteralPath $TargetExe)) {
+      Move-Item -LiteralPath $backup -Destination $TargetExe -Force -ErrorAction SilentlyContinue
+    }
+    throw
+  }
+} elseif ($Mode -eq 'nsis_silent') {
+  $proc = Start-Process -FilePath $SourcePath -ArgumentList @('/S') -PassThru -WindowStyle Hidden
+  $proc.WaitForExit()
+  Remove-Item -LiteralPath $SourcePath -Force -ErrorAction SilentlyContinue
+} elseif ($Mode -eq 'msi_silent') {
+  $proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', $SourcePath, '/qn', '/norestart') -PassThru -WindowStyle Hidden
+  $proc.WaitForExit()
+  Remove-Item -LiteralPath $SourcePath -Force -ErrorAction SilentlyContinue
+}
+if (Test-Path -LiteralPath $TargetExe) {
+  Start-Process -FilePath $TargetExe
+}
+"#
+}
+
+pub fn apply_downloaded_update(path: &Path) -> Result<()> {
     let dir = updates_dir();
-    let canonical_dir = fs::canonicalize(&dir).unwrap_or(dir);
+    let canonical_dir = fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
     let canonical_file = fs::canonicalize(path)
-        .with_context(|| format!("Downloaded installer not found at {}", path.display()))?;
+        .with_context(|| format!("Downloaded update not found at {}", path.display()))?;
 
     if !canonical_file.starts_with(&canonical_dir) {
         return Err(anyhow!(
-            "Refusing to execute installer outside BitChord updates folder"
+            "Refusing to apply update outside BitChord updates folder"
         ));
     }
 
-    let lower = canonical_file
+    let file_name = canonical_file
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if !(lower.ends_with(".exe") || lower.ends_with(".msi")) {
-        return Err(anyhow!("Installer must be a Windows .exe or .msi package"));
-    }
+        .unwrap_or("");
+    let mode = detect_apply_mode(file_name)?;
 
     #[cfg(target_os = "windows")]
     {
-        if lower.ends_with(".msi") {
-            std::process::Command::new("msiexec")
-                .arg("/i")
-                .arg(&canonical_file)
-                .spawn()
-                .context("Failed to launch Windows MSI installer")?;
-        } else {
-            std::process::Command::new(&canonical_file)
-                .spawn()
-                .context("Failed to launch Windows setup executable")?;
-        }
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+        let target_exe = std::env::current_exe().context("Unable to locate running executable")?;
+        let script_path = canonical_dir.join("apply-update.ps1");
+        fs::write(&script_path, build_apply_script_ps1())
+            .context("Failed to write in-app self-update helper")?;
+
+        std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-WindowStyle",
+                "Hidden",
+                "-File",
+            ])
+            .arg(&script_path)
+            .arg("-TargetPid")
+            .arg(std::process::id().to_string())
+            .arg("-SourcePath")
+            .arg(&canonical_file)
+            .arg("-TargetExe")
+            .arg(&target_exe)
+            .arg("-Mode")
+            .arg(mode.as_arg())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .context("Failed to launch silent self-update worker")?;
         Ok(())
     }
 
     #[cfg(not(target_os = "windows"))]
     {
+        let _ = mode;
         Err(anyhow!(
-            "Direct installer launch is only supported on Windows"
+            "Silent self-update is only supported on Windows"
         ))
     }
+}
+
+pub fn launch_downloaded_installer(path: &Path) -> Result<()> {
+    apply_downloaded_update(path)
 }
 
 #[cfg(test)]
@@ -971,5 +1108,50 @@ mod tests {
             parse_sha256_from_checksum_text(sums, "BitChord-0.12.0-x64-setup.exe").as_deref(),
             Some("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
         );
+    }
+
+    #[test]
+    fn prefers_portable_binary_over_setup_for_standalone_runs_and_setup_for_installed_runs() {
+        let assets = vec![
+            ReleaseAssetItem {
+                name: "BitChord-0.12.0-x64-setup.exe".into(),
+                download_url: "https://example.invalid/setup.exe".into(),
+                sha256: None,
+            },
+            ReleaseAssetItem {
+                name: "BitChord-win-x64.exe".into(),
+                download_url: "https://example.invalid/portable.exe".into(),
+                sha256: None,
+            },
+            ReleaseAssetItem {
+                name: "BitChord-0.12.0-x64.msi".into(),
+                download_url: "https://example.invalid/pkg.msi".into(),
+                sha256: None,
+            },
+        ];
+
+        assert_eq!(
+            select_windows_installer_for_mode(&assets, false).map(|a| a.name.as_str()),
+            Some("BitChord-win-x64.exe")
+        );
+        assert_eq!(
+            select_windows_installer_for_mode(&assets, true).map(|a| a.name.as_str()),
+            Some("BitChord-0.12.0-x64-setup.exe")
+        );
+
+        assert_eq!(
+            detect_apply_mode("BitChord-win-x64.exe").unwrap(),
+            UpdateApplyMode::PortableExe
+        );
+        assert_eq!(
+            detect_apply_mode("BitChord-0.12.0-x64-setup.exe").unwrap(),
+            UpdateApplyMode::NsisSilent
+        );
+        assert_eq!(
+            detect_apply_mode("BitChord-0.12.0-x64.msi").unwrap(),
+            UpdateApplyMode::MsiSilent
+        );
+        assert!(build_apply_script_ps1().contains("portable_exe"));
+        assert!(build_apply_script_ps1().contains("nsis_silent"));
     }
 }

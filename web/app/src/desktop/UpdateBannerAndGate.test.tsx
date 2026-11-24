@@ -17,16 +17,20 @@ function makeUpdate(overrides: Partial<UpdateCheckResult> = {}): UpdateCheckResu
     maxMajorPatchLag: 3,
     mandatory: false,
     releaseUrl: 'https://github.com/Aberuu/bitchord-dsk/releases/tag/v0.10.0',
-    installerUrl: 'https://example.invalid/BitChord-0.10.0-x64-setup.exe',
+    installerUrl: 'https://example.invalid/BitChord-win-x64.exe',
     installerSha256: null,
-    installerFileName: 'BitChord-0.10.0-x64-setup.exe',
+    installerFileName: 'BitChord-win-x64.exe',
     downloadedPath: null,
-    notes: 'Fixes and improvements.',
+    notes: [
+      '![Feature Banner](https://example.invalid/hero.png)',
+      '## Top Features',
+      '- Seamless in-app self-updates without reinstalling.',
+    ].join('\n'),
     ...overrides,
   };
 }
 
-describe('UpdateBannerAndGate', () => {
+describe('UpdateBannerAndGate (Software Update frosted dialog)', () => {
   let host: HTMLDivElement;
   let root: Root;
 
@@ -34,37 +38,76 @@ describe('UpdateBannerAndGate', () => {
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
-    useUi.setState({ mandatoryUpdateLocked: false });
+    useUi.setState({
+      mandatoryUpdateLocked: false,
+      updateModalOpen: false,
+      hasPendingUpdate: false,
+    });
   });
 
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
-    useUi.setState({ mandatoryUpdateLocked: false });
+    useUi.setState({
+      mandatoryUpdateLocked: false,
+      updateModalOpen: false,
+      hasPendingUpdate: false,
+    });
     vi.restoreAllMocks();
   });
 
-  it('shows dismissible soft update banner when 1 to 3 major patches behind', () => {
+  it('renders Software Update dialog with What\'s new Markdown, runs in-app download -> silent apply on Download Now, and dismisses on Remind Me Later', async () => {
+    const dlSpy = vi
+      .spyOn(desktopApi, 'downloadUpdate')
+      .mockResolvedValue('C:\\Users\\test\\AppData\\Local\\BitChord\\updates\\BitChord-win-x64.exe');
+    const installSpy = vi.spyOn(desktopApi, 'installUpdate').mockResolvedValue();
+
     act(() => {
       root.render(<UpdateBannerAndGate forceDesktop initialResult={makeUpdate()} />);
     });
 
     expect(useUi.getState().mandatoryUpdateLocked).toBe(false);
-    expect(host.querySelector('[role="status"]')?.textContent).toContain('BitChord v0.10.0');
-    expect(host.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(useUi.getState().hasPendingUpdate).toBe(true);
+    const dialog = host.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain('Software Update');
+    expect(dialog?.textContent).toContain('BitChord 0.10.0 is available to download.');
+    expect(dialog?.textContent).toContain("What's new");
+    expect(dialog?.textContent).toContain('Top Features');
+    expect(dialog?.querySelector('img')?.getAttribute('src')).toBe('https://example.invalid/hero.png');
 
-    const dismiss = host.querySelector<HTMLButtonElement>('button[aria-label="Dismiss update notification"]')!;
+    // Remind Me Later closes the modal while keeping pending indicator available.
+    const remindBtn = Array.from(host.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Remind Me Later'),
+    )!;
     act(() => {
-      dismiss.click();
+      remindBtn.click();
     });
-    expect(host.querySelector('[role="status"]')).toBeNull();
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(useUi.getState().hasPendingUpdate).toBe(true);
+
+    // Reopening (e.g. via TitleBar Update chip) and clicking Download Now downloads and auto-applies in app.
+    act(() => {
+      useUi.getState().setUpdateModalOpen(true);
+    });
+    const downloadNowBtn = Array.from(host.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Download Now'),
+    )!;
+    await act(async () => {
+      downloadNowBtn.click();
+    });
+    expect(dlSpy).toHaveBeenCalledTimes(1);
+    expect(installSpy).toHaveBeenCalledWith(
+      'C:\\Users\\test\\AppData\\Local\\BitChord\\updates\\BitChord-win-x64.exe',
+    );
+    expect(host.textContent).toContain('Applying BitChord 0.10.0 and restarting');
   });
 
-  it('renders non-dismissible mandatory gate when more than 3 major patches behind and supports retry on error', async () => {
+  it('locks mandatory gate when more than 3 major patches behind, hides Remind Me Later, blocks Escape, and supports Try Again on error', async () => {
     const dlSpy = vi
       .spyOn(desktopApi, 'downloadUpdate')
       .mockRejectedValueOnce(new Error('Network interrupted'))
-      .mockResolvedValueOnce('C:\\Users\\test\\AppData\\Local\\BitChord\\updates\\BitChord-0.12.0-setup.exe');
+      .mockResolvedValueOnce('C:\\Users\\test\\AppData\\Local\\BitChord\\updates\\BitChord-win-x64.exe');
+    const installSpy = vi.spyOn(desktopApi, 'installUpdate').mockResolvedValue();
 
     act(() => {
       root.render(
@@ -84,6 +127,8 @@ describe('UpdateBannerAndGate', () => {
     const dialog = host.querySelector('[role="alertdialog"][data-mandatory-update="true"]');
     expect(dialog).not.toBeNull();
     expect(dialog?.textContent).toContain('4 major patches behind');
+    expect(dialog?.textContent).not.toContain('Remind Me Later');
+    expect(dialog?.textContent).toContain('Exit BitChord');
 
     // Pressing Escape must NOT dismiss mandatory update dialog.
     const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
@@ -93,23 +138,23 @@ describe('UpdateBannerAndGate', () => {
     expect(esc.defaultPrevented).toBe(true);
     expect(host.querySelector('[data-mandatory-update="true"]')).not.toBeNull();
 
-    // First download fails and exposes Retry button.
-    const updateBtn = Array.from(host.querySelectorAll('button')).find((b) =>
-      b.textContent?.includes('Update & Install'),
+    // First download attempt fails and shows Try Again.
+    const downloadBtn = Array.from(host.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Download Now'),
     )!;
     await act(async () => {
-      updateBtn.click();
+      downloadBtn.click();
     });
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('Network interrupted');
 
-    // Clicking Retry succeeds and transitions button to Install Update.
+    // Clicking Try Again downloads and silently triggers installUpdate.
     const retryBtn = Array.from(host.querySelectorAll('button')).find((b) =>
-      b.textContent?.includes('Retry'),
+      b.textContent?.includes('Try Again'),
     )!;
     await act(async () => {
       retryBtn.click();
     });
     expect(dlSpy).toHaveBeenCalledTimes(2);
-    expect(host.textContent).toContain('Install Update');
+    expect(installSpy).toHaveBeenCalledTimes(1);
   });
 });
