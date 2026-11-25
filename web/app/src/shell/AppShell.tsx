@@ -126,7 +126,7 @@ export function AppShell() {
         <Sidebar />
         {!desktop && (
           <div className="pointer-events-none absolute top-0 left-0 z-[calc(var(--z-web-chrome)+1)] hidden h-11 w-(--web-navigation-compact-width) items-center justify-center sm:flex">
-            <SidebarToggleButton className="pointer-events-auto grid size-9 place-items-center rounded-nav text-secondary transition-colors hover:bg-quinary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-key" />
+            <SidebarToggleButton className="pointer-events-auto grid size-9 place-items-center rounded-nav text-secondary transition-colors hover:bg-quinary hover:text-primary" />
           </div>
         )}
         <TitleBar />

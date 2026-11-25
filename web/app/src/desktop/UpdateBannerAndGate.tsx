@@ -1,3 +1,4 @@
+import { ArrowRight } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   desktopApi,
@@ -84,7 +85,7 @@ export function UpdateBannerAndGate({
     initialResult?.downloadedPath ?? null,
   );
   const lastNotifiedVersionRef = useRef<string | null>(null);
-  const primaryActionRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   const mandatory = Boolean(result?.mandatory);
   const isAvailable = Boolean(
@@ -146,7 +147,7 @@ export function UpdateBannerAndGate({
 
   useEffect(() => {
     if (!modalOpen && !mandatory && !previewMode) return;
-    primaryActionRef.current?.focus({ preventScroll: true });
+    dialogRef.current?.focus({ preventScroll: true });
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key !== 'Escape') return;
       ev.preventDefault();
@@ -340,21 +341,23 @@ export function UpdateBannerAndGate({
       }}
     >
       <div
-        className={`flex max-h-[90vh] flex-col overflow-hidden rounded-[18px] border border-(--labelDivider) bg-(--systemStandardThickMaterialSover) text-primary shadow-[0_24px_64px_rgba(0,0,0,0.48)] backdrop-blur-2xl animate-zoom ${
-          hasNotes ? 'w-[min(520px,92vw)]' : 'w-[min(360px,92vw)]'
+        ref={dialogRef}
+        tabIndex={-1}
+        className={`flex max-h-[90vh] flex-col overflow-hidden rounded-[22px] border border-(--labelDivider) bg-(--systemStandardThickMaterialSover) text-primary shadow-[0_24px_64px_rgba(0,0,0,0.48)] outline-none backdrop-blur-2xl animate-zoom ${
+          hasNotes ? 'w-[min(480px,92vw)]' : 'w-[min(360px,92vw)]'
         }`}
-        style={{ backdropFilter: 'saturate(200%) blur(26px)' }}
+        style={{ backdropFilter: 'saturate(200%) blur(28px)' }}
         onClick={(ev) => ev.stopPropagation()}
       >
-        <div className="flex-1 overflow-y-auto px-5 pt-5 pb-4 text-center">
+        <div className="flex-1 overflow-y-auto px-6 pt-5 pb-4 text-center scrollbar-compact">
           <h2 id="software-update-title" className="text-[18px] leading-[23px] font-semibold tracking-[-0.015em] text-primary">
             Software Update
           </h2>
 
-          <div className="mt-2 flex justify-center">
-            <span className="inline-flex items-center gap-1.5 rounded-pill border border-(--labelDivider) bg-quaternary px-3 py-1 font-mono text-[11.5px] font-medium text-secondary">
+          <div className="mt-2.5 flex justify-center">
+            <span className="inline-flex items-center gap-1.5 rounded-pill border border-(--labelDivider) bg-primary/6 px-3 py-1 font-mono text-[11.5px] font-medium text-secondary">
               <span>v{result.currentVersion}</span>
-              <span aria-hidden="true">-&gt;</span>
+              <ArrowRight size={12} strokeWidth={2.2} className="text-secondary/80" aria-hidden="true" />
               <span className="font-semibold text-primary">v{versionLabel}</span>
             </span>
           </div>
@@ -396,11 +399,11 @@ export function UpdateBannerAndGate({
           )}
 
           {result.notes && (
-            <div className="mt-3.5 text-left">
+            <div className="mt-4 text-left">
               <p className="px-0.5 text-[12px] leading-[16px] font-semibold text-secondary">
                 What&apos;s new
               </p>
-              <div className="mt-1.5 max-h-[min(46vh,360px)] overflow-y-auto rounded-[14px] border border-(--labelDivider) bg-quaternary/55 px-4 py-3.5">
+              <div className="mt-1.5 max-h-[min(44vh,340px)] overflow-y-auto rounded-[14px] border border-(--labelDivider) bg-primary/5 px-4 py-3.5 scrollbar-compact">
                 <ReleaseNotesMarkdown notes={result.notes} />
               </div>
             </div>
@@ -409,19 +412,19 @@ export function UpdateBannerAndGate({
 
         <div className="shrink-0 border-t border-(--labelDivider)">
           {applying ? (
-            <div className="flex min-h-[44px] w-full items-center justify-center text-[15px] font-medium text-secondary">
+            <div className="flex min-h-[48px] w-full items-center justify-center text-[15px] font-medium text-secondary">
               Installing Update...
             </div>
           ) : downloading ? (
             mandatory ? (
-              <div className="flex min-h-[44px] w-full items-center justify-center text-[15px] font-medium text-secondary">
+              <div className="flex min-h-[48px] w-full items-center justify-center text-[15px] font-medium text-secondary">
                 Downloading Update...
               </div>
             ) : (
               <button
                 type="button"
                 onClick={dismissLater}
-                className="flex min-h-[44px] w-full items-center justify-center text-[15px] font-normal text-primary/90 transition-colors hover:bg-primary/8 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-key"
+                className="flex min-h-[48px] w-full items-center justify-center text-[15px] font-normal text-primary/90 transition-colors hover:bg-primary/6"
               >
                 Hide &amp; Continue in Background
               </button>
@@ -430,10 +433,9 @@ export function UpdateBannerAndGate({
             <>
               {result.installerUrl && (
                 <button
-                  ref={primaryActionRef}
                   type="button"
                   onClick={() => void downloadAndApply(result)}
-                  className="flex min-h-[44px] w-full items-center justify-center text-[15px] font-semibold text-primary transition-colors hover:bg-primary/8 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-key"
+                  className="flex min-h-[48px] w-full items-center justify-center text-[15px] font-semibold text-primary transition-colors hover:bg-primary/6"
                 >
                   Try Again
                 </button>
@@ -443,7 +445,7 @@ export function UpdateBannerAndGate({
                   href={result.releaseUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="flex min-h-[44px] w-full items-center justify-center border-t border-(--labelDivider) text-[15px] font-normal text-primary/90 transition-colors hover:bg-primary/8 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-key"
+                  className="flex min-h-[48px] w-full items-center justify-center border-t border-(--labelDivider) text-[15px] font-normal text-primary/90 transition-colors hover:bg-primary/6"
                 >
                   Open Releases Page
                 </a>
@@ -451,7 +453,7 @@ export function UpdateBannerAndGate({
               <button
                 type="button"
                 onClick={mandatory ? () => void desktopApi.exitApp() : dismissLater}
-                className="flex min-h-[44px] w-full items-center justify-center border-t border-(--labelDivider) text-[15px] font-normal text-secondary transition-colors hover:bg-primary/8 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-key"
+                className="flex min-h-[48px] w-full items-center justify-center border-t border-(--labelDivider) text-[15px] font-normal text-secondary transition-colors hover:bg-primary/6 hover:text-primary"
               >
                 {mandatory ? 'Exit BitChord' : 'Remind Me Later'}
               </button>
@@ -460,10 +462,9 @@ export function UpdateBannerAndGate({
             <>
               {result.installerUrl || downloadedPath ? (
                 <button
-                  ref={primaryActionRef}
                   type="button"
                   onClick={() => void downloadAndApply(result)}
-                  className="flex min-h-[44px] w-full items-center justify-center text-[15px] font-semibold text-key transition-colors hover:bg-primary/8 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-key"
+                  className="flex min-h-[48px] w-full items-center justify-center text-[15px] font-semibold text-key transition-colors hover:bg-primary/6"
                 >
                   {downloadedPath ? 'Update & Restart Now' : 'Download Now'}
                 </button>
@@ -472,7 +473,7 @@ export function UpdateBannerAndGate({
                   href={result.releaseUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="flex min-h-[44px] w-full items-center justify-center text-[15px] font-semibold text-key transition-colors hover:bg-primary/8 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-key"
+                  className="flex min-h-[48px] w-full items-center justify-center text-[15px] font-semibold text-key transition-colors hover:bg-primary/6"
                 >
                   Open Releases Page
                 </a>
@@ -481,7 +482,7 @@ export function UpdateBannerAndGate({
               <button
                 type="button"
                 onClick={mandatory ? () => void desktopApi.exitApp() : dismissLater}
-                className={`flex min-h-[44px] w-full items-center justify-center border-t border-(--labelDivider) text-[15px] font-normal transition-colors hover:bg-primary/8 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-key ${
+                className={`flex min-h-[48px] w-full items-center justify-center border-t border-(--labelDivider) text-[15px] font-normal transition-colors hover:bg-primary/6 ${
                   mandatory ? 'text-red' : 'text-secondary hover:text-primary'
                 }`}
               >

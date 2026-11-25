@@ -215,12 +215,13 @@ pub struct ChromecastMeta {
 
 async fn send_cast_json<W: AsyncWriteExt + Unpin>(
     writer: &mut W,
+    source_id: &str,
     dest: &str,
     ns: &str,
     payload: Value,
 ) -> std::io::Result<()> {
     let bytes = encode_cast_message(&CastMessage {
-        source_id: "sender-0".to_string(),
+        source_id: source_id.to_string(),
         destination_id: dest.to_string(),
         namespace: ns.to_string(),
         payload_utf8: payload.to_string(),
@@ -263,6 +264,7 @@ pub async fn start_chromecast_session(
 
     tokio::spawn(async move {
         let (mut reader, mut writer) = tokio::io::split(tls);
+        let sender_id = format!("sender-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
         let mut req_id = 1i64;
         let mut next_req = || {
             let v = req_id;
@@ -284,9 +286,15 @@ pub async fn start_chromecast_session(
         };
         on_state(session.clone());
 
-        if send_cast_json(&mut writer, "receiver-0", NS_CONNECTION, json!({ "type": "CONNECT" }))
-            .await
-            .is_err()
+        if send_cast_json(
+            &mut writer,
+            &sender_id,
+            "receiver-0",
+            NS_CONNECTION,
+            json!({ "type": "CONNECT", "origin": {} }),
+        )
+        .await
+        .is_err()
         {
             session.connected = false;
             session.connecting = false;
@@ -298,6 +306,16 @@ pub async fn start_chromecast_session(
 
         let _ = send_cast_json(
             &mut writer,
+            &sender_id,
+            "receiver-0",
+            NS_RECEIVER,
+            json!({ "type": "GET_STATUS", "requestId": next_req() }),
+        )
+        .await;
+
+        let _ = send_cast_json(
+            &mut writer,
+            &sender_id,
             "receiver-0",
             NS_RECEIVER,
             json!({
@@ -318,13 +336,13 @@ pub async fn start_chromecast_session(
         loop {
             tokio::select! {
                 _ = heartbeat.tick() => {
-                    if send_cast_json(&mut writer, "receiver-0", NS_HEARTBEAT, json!({ "type": "PING" })).await.is_err() {
+                    if send_cast_json(&mut writer, &sender_id, "receiver-0", NS_HEARTBEAT, json!({ "type": "PING" })).await.is_err() {
                         break;
                     }
                 }
                 _ = status_poll.tick() => {
                     if let Some(tid) = transport_id.as_deref() {
-                        let _ = send_cast_json(&mut writer, tid, NS_MEDIA, json!({ "type": "GET_STATUS", "requestId": next_req() })).await;
+                        let _ = send_cast_json(&mut writer, &sender_id, tid, NS_MEDIA, json!({ "type": "GET_STATUS", "requestId": next_req() })).await;
                     }
                 }
                 cmd = cmd_rx.recv() => {
@@ -342,10 +360,11 @@ pub async fn start_chromecast_session(
                             session.status = "loading".to_string();
                             session.position_sec = start_sec;
                             session.duration_sec = duration_sec;
+                            session.error = None;
                             on_state(session.clone());
                             if let Some(tid) = transport_id.as_deref() {
                                 let payload = build_load_payload(next_req(), &meta);
-                                if send_cast_json(&mut writer, tid, NS_MEDIA, payload).await.is_err() {
+                                if send_cast_json(&mut writer, &sender_id, tid, NS_MEDIA, payload).await.is_err() {
                                     break;
                                 }
                             } else {
@@ -354,26 +373,26 @@ pub async fn start_chromecast_session(
                         }
                         ChromecastCmd::Play => {
                             if let (Some(tid), Some(msid)) = (transport_id.as_deref(), media_session_id) {
-                                let _ = send_cast_json(&mut writer, tid, NS_MEDIA, json!({ "type": "PLAY", "mediaSessionId": msid, "requestId": next_req() })).await;
+                                let _ = send_cast_json(&mut writer, &sender_id, tid, NS_MEDIA, json!({ "type": "PLAY", "mediaSessionId": msid, "requestId": next_req() })).await;
                             }
                         }
                         ChromecastCmd::Pause => {
                             if let (Some(tid), Some(msid)) = (transport_id.as_deref(), media_session_id) {
-                                let _ = send_cast_json(&mut writer, tid, NS_MEDIA, json!({ "type": "PAUSE", "mediaSessionId": msid, "requestId": next_req() })).await;
+                                let _ = send_cast_json(&mut writer, &sender_id, tid, NS_MEDIA, json!({ "type": "PAUSE", "mediaSessionId": msid, "requestId": next_req() })).await;
                             }
                         }
                         ChromecastCmd::Seek(sec) => {
                             if let (Some(tid), Some(msid)) = (transport_id.as_deref(), media_session_id) {
                                 session.position_sec = sec.max(0.0);
                                 on_state(session.clone());
-                                let _ = send_cast_json(&mut writer, tid, NS_MEDIA, json!({ "type": "SEEK", "mediaSessionId": msid, "currentTime": sec.max(0.0), "requestId": next_req() })).await;
+                                let _ = send_cast_json(&mut writer, &sender_id, tid, NS_MEDIA, json!({ "type": "SEEK", "mediaSessionId": msid, "currentTime": sec.max(0.0), "requestId": next_req() })).await;
                             }
                         }
                         ChromecastCmd::SetVolume(vol) => {
                             let level = vol.clamp(0.0, 1.0);
                             session.volume = level;
                             on_state(session.clone());
-                            let _ = send_cast_json(&mut writer, "receiver-0", NS_RECEIVER, json!({
+                            let _ = send_cast_json(&mut writer, &sender_id, "receiver-0", NS_RECEIVER, json!({
                                 "type": "SET_VOLUME",
                                 "volume": { "level": level },
                                 "requestId": next_req()
@@ -382,11 +401,11 @@ pub async fn start_chromecast_session(
                         ChromecastCmd::Disconnect => {
                             if let Some(tid) = transport_id.as_deref() {
                                 if let Some(msid) = media_session_id {
-                                    let _ = send_cast_json(&mut writer, tid, NS_MEDIA, json!({ "type": "STOP", "mediaSessionId": msid, "requestId": next_req() })).await;
+                                    let _ = send_cast_json(&mut writer, &sender_id, tid, NS_MEDIA, json!({ "type": "STOP", "mediaSessionId": msid, "requestId": next_req() })).await;
                                 }
-                                let _ = send_cast_json(&mut writer, tid, NS_CONNECTION, json!({ "type": "CLOSE" })).await;
+                                let _ = send_cast_json(&mut writer, &sender_id, tid, NS_CONNECTION, json!({ "type": "CLOSE" })).await;
                             }
-                            let _ = send_cast_json(&mut writer, "receiver-0", NS_CONNECTION, json!({ "type": "CLOSE" })).await;
+                            let _ = send_cast_json(&mut writer, &sender_id, "receiver-0", NS_CONNECTION, json!({ "type": "CLOSE" })).await;
                             break;
                         }
                     }
@@ -412,7 +431,22 @@ pub async fn start_chromecast_session(
                     let msg_type = val.get("type").and_then(Value::as_str).unwrap_or("");
                     match msg.namespace.as_str() {
                         NS_HEARTBEAT if msg_type == "PING" => {
-                            let _ = send_cast_json(&mut writer, "receiver-0", NS_HEARTBEAT, json!({ "type": "PONG" })).await;
+                            let _ = send_cast_json(&mut writer, &sender_id, "receiver-0", NS_HEARTBEAT, json!({ "type": "PONG" })).await;
+                        }
+                        NS_CONNECTION if msg_type == "CLOSE" => {
+                            if transport_id.as_deref() == Some(msg.source_id.as_str()) {
+                                transport_id = None;
+                                media_session_id = None;
+                            }
+                        }
+                        NS_RECEIVER if msg_type == "LAUNCH_ERROR" => {
+                            let reason = val.get("reason").and_then(Value::as_str).unwrap_or("unknown");
+                            session.connected = false;
+                            session.connecting = false;
+                            session.status = "error".to_string();
+                            session.error = Some(format!("Receiver failed to launch media player ({reason})."));
+                            on_state(session);
+                            return;
                         }
                         NS_RECEIVER if msg_type == "RECEIVER_STATUS" => {
                             if let Some(vol) = val.pointer("/status/volume/level").and_then(Value::as_f64) {
@@ -427,16 +461,30 @@ pub async fn start_chromecast_session(
                                         let changed = transport_id.as_deref() != Some(tid);
                                         if changed {
                                             transport_id = Some(tid.to_string());
-                                            let _ = send_cast_json(&mut writer, tid, NS_CONNECTION, json!({ "type": "CONNECT" })).await;
+                                            let _ = send_cast_json(&mut writer, &sender_id, tid, NS_CONNECTION, json!({ "type": "CONNECT", "origin": {} })).await;
                                             if let Some(meta) = pending_media.take() {
                                                 let payload = build_load_payload(next_req(), &meta);
-                                                let _ = send_cast_json(&mut writer, tid, NS_MEDIA, payload).await;
+                                                let _ = send_cast_json(&mut writer, &sender_id, tid, NS_MEDIA, payload).await;
                                             }
                                         }
                                         session.connecting = false;
                                     }
                                 }
                             }
+                            on_state(session.clone());
+                        }
+                        NS_MEDIA if matches!(msg_type, "LOAD_FAILED" | "LOAD_CANCELLED" | "INVALID_REQUEST") => {
+                            let reason = val
+                                .get("detailedErrorCode")
+                                .and_then(Value::as_i64)
+                                .map(|c| format!("code {c}"))
+                                .or_else(|| val.get("reason").and_then(Value::as_str).map(String::from))
+                                .unwrap_or_else(|| msg_type.to_string());
+                            session.connecting = false;
+                            session.status = "error".to_string();
+                            session.error = Some(format!(
+                                "Receiver could not load this track ({reason}). Check that Windows Firewall allows BitChord on your local Wi-Fi."
+                            ));
                             on_state(session.clone());
                         }
                         NS_MEDIA if msg_type == "MEDIA_STATUS" => {
@@ -484,30 +532,34 @@ pub async fn start_chromecast_session(
 }
 
 fn build_load_payload(request_id: i64, meta: &ChromecastMeta) -> Value {
-    let mut images = Vec::new();
-    if let Some(art) = &meta.artwork_url {
-        images.push(json!({ "url": art }));
-    }
     let clean_mime = meta.mime_type.split(';').next().unwrap_or("audio/mp4").trim();
+    let mut metadata = serde_json::Map::new();
+    metadata.insert("metadataType".into(), json!(3));
+    metadata.insert("title".into(), json!(meta.title));
+    metadata.insert("artist".into(), json!(meta.artist));
+    if let Some(album) = meta.album.as_deref().filter(|a| !a.trim().is_empty()) {
+        metadata.insert("albumName".into(), json!(album));
+    }
+    if let Some(art) = meta.artwork_url.as_deref().filter(|u| !u.trim().is_empty()) {
+        metadata.insert("images".into(), json!([{ "url": art }]));
+    }
+
+    let mut media = serde_json::Map::new();
+    media.insert("contentId".into(), json!(meta.media_url));
+    media.insert("contentUrl".into(), json!(meta.media_url));
+    media.insert("contentType".into(), json!(clean_mime));
+    media.insert("streamType".into(), json!("BUFFERED"));
+    if meta.duration_sec > 0.0 {
+        media.insert("duration".into(), json!(meta.duration_sec));
+    }
+    media.insert("metadata".into(), Value::Object(metadata));
+
     json!({
         "type": "LOAD",
         "requestId": request_id,
         "autoplay": meta.autoplay,
         "currentTime": meta.start_sec.max(0.0),
-        "media": {
-            "contentId": meta.media_url,
-            "contentUrl": meta.media_url,
-            "contentType": clean_mime,
-            "streamType": "BUFFERED",
-            "duration": if meta.duration_sec > 0.0 { Value::from(meta.duration_sec) } else { Value::Null },
-            "metadata": {
-                "metadataType": 3,
-                "title": meta.title,
-                "artist": meta.artist,
-                "albumName": meta.album,
-                "images": images
-            }
-        }
+        "media": Value::Object(media),
     })
 }
 
@@ -529,5 +581,28 @@ mod tests {
         assert_eq!(len + 4, encoded.len());
         let decoded = decode_cast_message_body(&encoded[4..]).expect("decode");
         assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn load_payload_omits_optional_null_fields() {
+        let meta = ChromecastMeta {
+            track_id: "abc".into(),
+            media_url: "http://192.168.1.5:8080/cast/t/stream.m4a".into(),
+            mime_type: "audio/mp4; codecs=\"mp4a.40.2\"".into(),
+            title: "Song".into(),
+            artist: "Artist".into(),
+            album: None,
+            artwork_url: None,
+            duration_sec: 0.0,
+            start_sec: 0.0,
+            autoplay: true,
+        };
+        let payload = build_load_payload(7, &meta);
+        let media = payload.get("media").and_then(Value::as_object).unwrap();
+        assert_eq!(media.get("contentType").unwrap(), "audio/mp4");
+        assert!(!media.contains_key("duration"));
+        let md = media.get("metadata").and_then(Value::as_object).unwrap();
+        assert!(!md.contains_key("albumName"));
+        assert!(!md.contains_key("images"));
     }
 }

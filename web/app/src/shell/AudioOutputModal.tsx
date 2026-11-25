@@ -1,6 +1,7 @@
 import {
   AudioLines,
   Bluetooth,
+  Cast,
   Check,
   ChevronRight,
   ExternalLink,
@@ -18,6 +19,7 @@ import { BitPerfectConfirmBanner } from '@/desktop/BitPerfectBypass';
 import { isExclusiveOutputMode } from '@/desktop/bitPerfectMode';
 import { desktopApi, type AudioDeviceKind, type OutputMode } from '@/desktop/tauriBridge';
 import { useAudioPipeline } from '@/desktop/useAudioPipeline';
+import { useCastSession, useCastSupport } from '@/desktop/useCastSupport';
 import { useDesktopAudioDevices } from '@/desktop/useDesktopAudioDevices';
 import { usePlayer } from '@/state/player';
 import { useUi } from '@/state/ui';
@@ -46,20 +48,23 @@ export function AudioOutputModal() {
 function AudioOutputModalContent() {
   const setOpen = useUi((s) => s.setAudioOutputOpen);
   const setPipelineOpen = useUi((s) => s.setAudioPipelineOpen);
+  const setCastModalOpen = useUi((s) => s.setCastModalOpen);
   const volume = usePlayer((s) => s.volume);
   const muted = usePlayer((s) => s.muted);
   const { setVolume, toggleMute } = usePlayer.getState();
   const pipeline = useAudioPipeline();
+  const castSupport = useCastSupport();
+  const castSession = useCastSession();
   const { desktop, devicesQuery, snapQuery, updateAudio, refresh } = useDesktopAudioDevices({
     enabled: true,
     live: true,
   });
-  const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const [confirmExclusiveOpen, setConfirmExclusiveOpen] = useState(false);
   const [asioPanelError, setAsioPanelError] = useState<string | null>(null);
 
   useEffect(() => {
-    closeRef.current?.focus({ preventScroll: true });
+    dialogRef.current?.focus({ preventScroll: true });
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key === 'Escape') {
         ev.stopPropagation();
@@ -127,10 +132,11 @@ function AudioOutputModalContent() {
   const level = muted ? 0 : volume;
   const displayLevel = bitPerfectActive ? 1 : level;
   const refreshing = devicesQuery.isFetching || snapQuery.isFetching;
+  const showCastRow = desktop || castSupport.supported;
 
   return (
     <div
-      className="fixed inset-0 z-[calc(var(--z-modal)-1)] flex items-end justify-center bg-black/55 p-4 backdrop-blur-xs animate-fade sm:items-center"
+      className="fixed inset-0 z-[calc(var(--z-modal)-1)] flex items-end justify-center bg-black/45 p-4 backdrop-blur-xs animate-fade sm:items-center"
       role="dialog"
       aria-modal="true"
       aria-labelledby="audio-output-title"
@@ -139,12 +145,14 @@ function AudioOutputModalContent() {
       }}
     >
       <div
-        data-full-screen
-        className="w-[min(420px,95vw)] overflow-hidden rounded-[24px] border border-white/12 bg-[#1c1c1e]/94 p-4 text-white shadow-[0_24px_64px_rgba(0,0,0,0.65)] backdrop-blur-2xl animate-zoom"
+        ref={dialogRef}
+        tabIndex={-1}
+        className="w-[min(420px,95vw)] overflow-hidden rounded-[24px] border border-(--labelDivider) bg-(--systemStandardThickMaterialSover) p-4 text-primary shadow-[0_24px_64px_rgba(0,0,0,0.48)] outline-none backdrop-blur-2xl animate-zoom"
+        style={{ backdropFilter: 'saturate(200%) blur(28px)' }}
       >
-        <div className="mx-auto mb-3 h-1 w-9 rounded-full bg-white/25 sm:hidden" aria-hidden="true" />
+        <div className="mx-auto mb-3 h-1 w-9 rounded-full bg-secondary/35 sm:hidden" aria-hidden="true" />
         <div className="mb-3.5 flex items-center justify-between px-1">
-          <h2 id="audio-output-title" className="type-[700_18px/22px] text-white">
+          <h2 id="audio-output-title" className="type-[700_18px/22px] text-primary">
             Audio output
           </h2>
           <div className="flex items-center gap-1.5">
@@ -154,7 +162,7 @@ function AudioOutputModalContent() {
                 onClick={() => void refresh()}
                 aria-label="Refresh audio devices"
                 title="Refresh audio devices"
-                className="grid size-8 place-items-center rounded-full bg-white/10 text-white/75 transition-colors hover:bg-white/18 hover:text-white"
+                className="grid size-8 place-items-center rounded-full bg-primary/8 text-secondary transition-colors hover:bg-primary/14 hover:text-primary"
               >
                 <RefreshCw
                   size={14}
@@ -164,11 +172,10 @@ function AudioOutputModalContent() {
               </button>
             )}
             <button
-              ref={closeRef}
               type="button"
               onClick={() => setOpen(false)}
               aria-label="Close audio output"
-              className="grid size-8 place-items-center rounded-full bg-white/10 text-white/75 transition-colors hover:bg-white/18 hover:text-white"
+              className="grid size-8 place-items-center rounded-full bg-primary/8 text-secondary transition-colors hover:bg-primary/14 hover:text-primary"
             >
               <X size={16} aria-hidden="true" />
             </button>
@@ -176,23 +183,22 @@ function AudioOutputModalContent() {
         </div>
 
         <div className="flex flex-col gap-2.5">
-          {/* Keep 4px inset breathing room so focus-visible outlines never clip at scroll corners. */}
           <div className="-m-1 flex max-h-[220px] flex-col gap-2 overflow-y-auto p-1 scrollbar-compact">
             <button
               type="button"
               onClick={() => selectDevice(null)}
               className={`flex w-full items-center gap-3.5 rounded-[16px] px-3.5 py-3 text-start transition-colors ${
-                activeDeviceId === null ? 'bg-white/14' : 'bg-white/7 hover:bg-white/11'
+                activeDeviceId === null ? 'bg-primary/12' : 'bg-primary/6 hover:bg-primary/10'
               }`}
             >
-              <span className="grid size-10 flex-none place-items-center rounded-full bg-white/12 text-white">
+              <span className="grid size-10 flex-none place-items-center rounded-full bg-primary/10 text-primary">
                 <MonitorSpeaker size={18} aria-hidden="true" />
               </span>
               <span className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate type-title-3-emphasized text-white">
+                <span className="truncate type-title-3-emphasized text-primary">
                   {desktop ? 'This PC (Default Output)' : 'This PC'}
                 </span>
-                <span className="truncate type-callout text-white/60">
+                <span className="truncate type-callout text-secondary">
                   {defaultDevice
                     ? activeDeviceId === null
                       ? `Playing via ${defaultDevice.name}`
@@ -203,7 +209,7 @@ function AudioOutputModalContent() {
                 </span>
               </span>
               {activeDeviceId === null && (
-                <Check size={18} strokeWidth={2.4} className="flex-none text-white" aria-hidden="true" />
+                <Check size={18} strokeWidth={2.4} className="flex-none text-primary" aria-hidden="true" />
               )}
             </button>
 
@@ -215,26 +221,50 @@ function AudioOutputModalContent() {
                   type="button"
                   onClick={() => selectDevice(dev.id)}
                   className={`flex w-full items-center gap-3.5 rounded-[16px] px-3.5 py-3 text-start transition-colors ${
-                    selected ? 'bg-white/14' : 'bg-white/7 hover:bg-white/11'
+                    selected ? 'bg-primary/12' : 'bg-primary/6 hover:bg-primary/10'
                   }`}
                 >
-                  <span className="grid size-10 flex-none place-items-center rounded-full bg-white/12 text-white">
+                  <span className="grid size-10 flex-none place-items-center rounded-full bg-primary/10 text-primary">
                     <OutputDeviceIcon kind={dev.kind} />
                   </span>
                   <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate type-title-3-emphasized text-white">{dev.name}</span>
-                    <span className="truncate type-callout text-white/60">
+                    <span className="truncate type-title-3-emphasized text-primary">{dev.name}</span>
+                    <span className="truncate type-callout text-secondary">
                       {dev.isUsbDac ? 'USB DAC · ' : ''}
                       {dev.backend} · up to {Math.round(dev.maxSampleRateHz / 1000)} kHz
                     </span>
                   </span>
                   {selected && (
-                    <Check size={18} strokeWidth={2.4} className="flex-none text-white" aria-hidden="true" />
+                    <Check size={18} strokeWidth={2.4} className="flex-none text-primary" aria-hidden="true" />
                   )}
                 </button>
               );
             })}
           </div>
+
+          {showCastRow && (
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                setCastModalOpen(true);
+              }}
+              className="flex w-full items-center gap-3.5 rounded-[16px] bg-primary/6 px-3.5 py-3 text-start transition-colors hover:bg-primary/10"
+            >
+              <span className="grid size-10 flex-none place-items-center rounded-full bg-primary/10 text-primary">
+                <Cast size={18} aria-hidden="true" />
+              </span>
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="type-title-3-emphasized text-primary">Cast</span>
+                <span className="truncate type-callout text-secondary">
+                  {castSession.connected && castSession.device
+                    ? `Casting to ${castSession.device.name}`
+                    : 'Chromecast and Google Cast speakers'}
+                </span>
+              </span>
+              <ChevronRight size={18} className="flex-none text-secondary" aria-hidden="true" />
+            </button>
+          )}
 
           {desktop && settings && (
             <>
@@ -242,13 +272,13 @@ function AudioOutputModalContent() {
                 type="button"
                 onClick={toggleExclusive}
                 aria-expanded={confirmExclusiveOpen}
-                className="flex w-full items-center justify-between gap-3 rounded-[16px] bg-white/7 px-3.5 py-3 text-start transition-colors hover:bg-white/11"
+                className="flex w-full items-center justify-between gap-3 rounded-[16px] bg-primary/6 px-3.5 py-3 text-start transition-colors hover:bg-primary/10"
               >
                 <span className="flex min-w-0 flex-col">
-                  <span className="type-body-emphasized text-white">
+                  <span className="type-body-emphasized text-primary">
                     {activeMode === 'asio' ? 'ASIO Native (Bit-Perfect)' : 'WASAPI Exclusive (Bit-Perfect)'}
                   </span>
-                  <span className="truncate type-callout text-white/60">
+                  <span className="truncate type-callout text-secondary">
                     {fallbackReason
                       ? fallbackReason
                       : bitPerfectActive
@@ -266,7 +296,7 @@ function AudioOutputModalContent() {
                   className={`rounded-pill px-2.5 py-1 type-caption-2 uppercase ${
                     isExclusiveOutputMode(activeMode)
                       ? 'bg-green/20 text-green'
-                      : 'bg-white/10 text-white/65'
+                      : 'bg-primary/10 text-secondary'
                   }`}
                 >
                   {bitPerfectExact ? 'Exact' : isExclusiveOutputMode(activeMode) ? 'On' : 'Off'}
@@ -277,18 +307,18 @@ function AudioOutputModalContent() {
                 <button
                   type="button"
                   onClick={() => void openAsioControlPanel()}
-                  className="flex w-full items-center justify-between gap-3 rounded-[16px] bg-white/7 px-3.5 py-2.5 text-start transition-colors hover:bg-white/11"
+                  className="flex w-full items-center justify-between gap-3 rounded-[16px] bg-primary/6 px-3.5 py-2.5 text-start transition-colors hover:bg-primary/10"
                 >
                   <span className="flex min-w-0 flex-col">
-                    <span className="type-callout-emphasized text-white">ASIO Control Panel</span>
-                    <span className="truncate type-caption-1 text-white/60">
+                    <span className="type-callout-emphasized text-primary">ASIO Control Panel</span>
+                    <span className="truncate type-caption-1 text-secondary">
                       {asioPanelError ??
                         (snap.asioBufferSamples
                           ? `${snap.asioBufferSamples} samples · ${snap.asioSampleType ?? 'Native ASIO'}`
                           : 'Configure DAC buffer size and clock source')}
                     </span>
                   </span>
-                  <ExternalLink size={15} className="flex-none text-white/60" aria-hidden="true" />
+                  <ExternalLink size={15} className="flex-none text-secondary" aria-hidden="true" />
                 </button>
               )}
 
@@ -303,7 +333,7 @@ function AudioOutputModalContent() {
           )}
 
           <div
-            className={`flex items-center gap-3 rounded-[16px] bg-white/7 px-3.5 py-3.5 ${
+            className={`flex items-center gap-3 rounded-[16px] bg-primary/6 px-3.5 py-3.5 ${
               bitPerfectActive ? 'opacity-45' : ''
             }`}
             aria-disabled={bitPerfectActive || undefined}
@@ -316,7 +346,7 @@ function AudioOutputModalContent() {
               }}
               aria-label={bitPerfectActive ? 'Volume bypassed in Bit-Perfect mode' : muted ? 'Unmute' : 'Mute'}
               title={bitPerfectActive ? 'Volume is bypassed in Bit-Perfect (WASAPI Exclusive) mode' : undefined}
-              className="grid size-7 flex-none place-items-center rounded-full text-white/75 transition-colors hover:text-white disabled:cursor-not-allowed disabled:hover:text-white/75"
+              className="grid size-7 flex-none place-items-center rounded-full text-secondary transition-colors hover:text-primary disabled:cursor-not-allowed disabled:hover:text-secondary"
             >
               {bitPerfectActive ? (
                 <Volume2 size={17} aria-hidden="true" />
@@ -338,12 +368,12 @@ function AudioOutputModalContent() {
               onChange={(e) => {
                 if (!bitPerfectActive) setVolume(Number(e.currentTarget.value));
               }}
-              className={`h-1.5 flex-1 appearance-none rounded-full bg-white/22 accent-white ${
+              className={`h-1.5 flex-1 appearance-none rounded-full bg-secondary/30 accent-primary ${
                 bitPerfectActive ? 'cursor-not-allowed' : 'cursor-pointer'
               }`}
             />
             <span
-              className={`text-right type-callout tabular-nums text-white/70 ${
+              className={`text-right type-callout tabular-nums text-secondary ${
                 bitPerfectActive ? 'w-16' : 'w-9'
               }`}
             >
@@ -357,16 +387,16 @@ function AudioOutputModalContent() {
               setOpen(false);
               setPipelineOpen(true);
             }}
-            className="flex w-full items-center gap-3.5 rounded-[16px] bg-white/7 px-3.5 py-3 text-start transition-colors hover:bg-white/12"
+            className="flex w-full items-center gap-3.5 rounded-[16px] bg-primary/6 px-3.5 py-3 text-start transition-colors hover:bg-primary/10"
           >
-            <span className="grid size-10 flex-none place-items-center rounded-full bg-white/12 text-white">
+            <span className="grid size-10 flex-none place-items-center rounded-full bg-primary/10 text-primary">
               <AudioLines size={18} aria-hidden="true" />
             </span>
             <span className="flex min-w-0 flex-1 flex-col">
-              <span className="type-title-3-emphasized text-white">Audio Pipeline</span>
-              <span className="truncate type-callout text-white/60 tabular-nums">{pipeline.shortSubtitle}</span>
+              <span className="type-title-3-emphasized text-primary">Audio Pipeline</span>
+              <span className="truncate type-callout text-secondary tabular-nums">{pipeline.shortSubtitle}</span>
             </span>
-            <ChevronRight size={18} className="flex-none text-white/50" aria-hidden="true" />
+            <ChevronRight size={18} className="flex-none text-secondary" aria-hidden="true" />
           </button>
         </div>
       </div>

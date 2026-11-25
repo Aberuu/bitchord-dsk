@@ -406,4 +406,27 @@ describe('AudioOutputModal', () => {
 
     expect(openAsioPanelMock).toHaveBeenCalledWith('asio:FiiO ASIO Driver');
   });
+
+  it('opens CastModal when clicking the Cast row in AudioOutputModal', async () => {
+    useUi.setState({ audioOutputOpen: true, castModalOpen: false });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <AudioOutputModal />
+        </QueryClientProvider>,
+      );
+    });
+    await flushUi();
+
+    const castBtn = Array.from(host.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Chromecast and Google Cast speakers'),
+    );
+    expect(castBtn).toBeTruthy();
+
+    await act(async () => {
+      castBtn!.click();
+    });
+    expect(useUi.getState().audioOutputOpen).toBe(false);
+    expect(useUi.getState().castModalOpen).toBe(true);
+  });
 });

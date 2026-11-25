@@ -888,6 +888,17 @@ pub fn detect_apply_mode(file_name: &str) -> Result<UpdateApplyMode> {
     }
 }
 
+pub fn strip_windows_verbatim_prefix(path: &Path) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
+
 pub fn build_apply_script_ps1() -> &'static str {
     r#"param(
   [Parameter(Mandatory=$true)][int]$TargetPid,
@@ -896,12 +907,24 @@ pub fn build_apply_script_ps1() -> &'static str {
   [Parameter(Mandatory=$true)][string]$Mode
 )
 $ErrorActionPreference = 'Stop'
-$logDir = Split-Path -Parent $SourcePath
-$logPath = Join-Path $logDir 'last-update.log'
+
+function Normalize-WinPath([string]$p) {
+  if ([string]::IsNullOrWhiteSpace($p)) { return $p }
+  if ($p.StartsWith('\\?\UNC\')) { return '\\' + $p.Substring(8) }
+  if ($p.StartsWith('\\?\')) { return $p.Substring(4) }
+  return $p
+}
+
+$SourcePath = Normalize-WinPath $SourcePath
+$TargetExe = Normalize-WinPath $TargetExe
+$logDir = [System.IO.Path]::GetDirectoryName($SourcePath)
+$logPath = [System.IO.Path]::Combine($logDir, 'last-update.log')
 
 function Write-Log([string]$msg) {
   $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff')
-  Add-Content -LiteralPath $logPath -Value "[$ts] $msg" -ErrorAction SilentlyContinue
+  try {
+    [System.IO.File]::AppendAllText($logPath, "[$ts] $msg`r`n", [System.Text.Encoding]::UTF8)
+  } catch {}
 }
 
 function Get-ExeSha256([string]$path) {
@@ -939,109 +962,114 @@ function Wait-FileReadable([string]$path, [int]$maxAttempts) {
   return $false
 }
 
-Write-Log "Starting update worker Mode=$Mode TargetPid=$TargetPid TargetExe=$TargetExe SourcePath=$SourcePath"
-
-for ($i = 0; $i -lt 120; $i++) {
-  if (-not (Get-Process -Id $TargetPid -ErrorAction SilentlyContinue)) { break }
-  Start-Sleep -Milliseconds 250
-}
-
-$exeName = [System.IO.Path]::GetFileNameWithoutExtension($TargetExe)
-for ($i = 0; $i -lt 40; $i++) {
-  $others = Get-Process -Name $exeName -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $TargetExe }
-  if (-not $others) { break }
-  Start-Sleep -Milliseconds 250
-}
-
-$unlocked = Wait-FileUnlocked -path $TargetExe -maxAttempts 60
-Write-Log "Target unlock status=$unlocked"
-
-$preHash = Get-ExeSha256 -path $TargetExe
-$targetDir = Split-Path -Parent $TargetExe
 $launchExe = $TargetExe
 $installSucceeded = $false
 
-if ($Mode -eq 'portable_exe') {
-  $backup = "$TargetExe.bak"
-  if (Test-Path -LiteralPath $backup) {
-    Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
-  }
-  try {
-    if (Test-Path -LiteralPath $TargetExe) {
-      Move-Item -LiteralPath $TargetExe -Destination $backup -Force
-    }
-    Copy-Item -LiteralPath $SourcePath -Destination $TargetExe -Force
-    $postHash = Get-ExeSha256 -path $TargetExe
-    $installSucceeded = ($null -ne $postHash) -and ($postHash -ne $preHash -or $null -eq $preHash)
-    Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
-  } catch {
-    Write-Log "Portable replace failed: $($_.Exception.Message)"
-    if ((Test-Path -LiteralPath $backup) -and -not (Test-Path -LiteralPath $TargetExe)) {
-      Move-Item -LiteralPath $backup -Destination $TargetExe -Force -ErrorAction SilentlyContinue
-    }
-    throw
-  }
-} elseif ($Mode -eq 'nsis_silent') {
-  $psi = New-Object System.Diagnostics.ProcessStartInfo
-  $psi.FileName = $SourcePath
-  # NSIS requires /D= to be the final argument and completely unquoted even when paths contain spaces.
-  $psi.Arguments = "/S /UPDATE /D=$targetDir"
-  $psi.UseShellExecute = $false
-  $psi.CreateNoWindow = $true
-  $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-  $proc = [System.Diagnostics.Process]::Start($psi)
-  $proc.WaitForExit()
-  $exitCode = $proc.ExitCode
-  Write-Log "NSIS exited with code=$exitCode args=$($psi.Arguments)"
+try {
+  Write-Log "Starting update worker Mode=$Mode TargetPid=$TargetPid TargetExe=$TargetExe SourcePath=$SourcePath"
 
-  for ($i = 0; $i -lt 80; $i++) {
-    $helpers = Get-Process -ErrorAction SilentlyContinue | Where-Object {
-      $_.ProcessName -match '^(_?Au_|uninstall)' -and $_.Path -and (
-        $_.Path.StartsWith($targetDir, [System.StringComparison]::OrdinalIgnoreCase) -or
-        $_.Path.StartsWith([System.IO.Path]::GetTempPath(), [System.StringComparison]::OrdinalIgnoreCase)
-      )
-    }
-    if (-not $helpers) { break }
+  for ($i = 0; $i -lt 120; $i++) {
+    if (-not (Get-Process -Id $TargetPid -ErrorAction SilentlyContinue)) { break }
     Start-Sleep -Milliseconds 250
   }
 
-  Start-Sleep -Milliseconds 300
-  $postHash = Get-ExeSha256 -path $launchExe
-  if (($null -eq $postHash) -or ($postHash -eq $preHash)) {
-    $regRoots = @(
-      'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
-      'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
-    )
-    $entry = Get-ItemProperty $regRoots -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq 'BitChord' } | Select-Object -First 1
-    if ($entry -and $entry.InstallLocation) {
-      $cleanLoc = $entry.InstallLocation.Trim().Trim('"')
-      $candidate = Join-Path $cleanLoc ([System.IO.Path]::GetFileName($TargetExe))
-      if (Test-Path -LiteralPath $candidate) {
-        $launchExe = $candidate
-        $postHash = Get-ExeSha256 -path $launchExe
+  $exeName = [System.IO.Path]::GetFileNameWithoutExtension($TargetExe)
+  for ($i = 0; $i -lt 40; $i++) {
+    $others = Get-Process -Name $exeName -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $TargetExe }
+    if (-not $others) { break }
+    Start-Sleep -Milliseconds 250
+  }
+
+  $unlocked = Wait-FileUnlocked -path $TargetExe -maxAttempts 60
+  Write-Log "Target unlock status=$unlocked"
+
+  $preHash = Get-ExeSha256 -path $TargetExe
+  $targetDir = [System.IO.Path]::GetDirectoryName($TargetExe)
+
+  if ($Mode -eq 'portable_exe') {
+    $backup = "$TargetExe.bak"
+    if (Test-Path -LiteralPath $backup) {
+      Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+    }
+    try {
+      if (Test-Path -LiteralPath $TargetExe) {
+        Move-Item -LiteralPath $TargetExe -Destination $backup -Force
+      }
+      Copy-Item -LiteralPath $SourcePath -Destination $TargetExe -Force
+      $postHash = Get-ExeSha256 -path $TargetExe
+      $installSucceeded = ($null -ne $postHash) -and ($postHash -ne $preHash -or $null -eq $preHash)
+      Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+    } catch {
+      Write-Log "Portable replace failed: $($_.Exception.Message)"
+      if ((Test-Path -LiteralPath $backup) -and -not (Test-Path -LiteralPath $TargetExe)) {
+        Move-Item -LiteralPath $backup -Destination $TargetExe -Force -ErrorAction SilentlyContinue
+      }
+      throw
+    }
+  } elseif ($Mode -eq 'nsis_silent') {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $SourcePath
+    # NSIS requires /D= to be the final argument and completely unquoted even when paths contain spaces.
+    $psi.Arguments = "/S /UPDATE /D=$targetDir"
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $proc.WaitForExit()
+    $exitCode = $proc.ExitCode
+    Write-Log "NSIS exited with code=$exitCode args=$($psi.Arguments)"
+
+    for ($i = 0; $i -lt 80; $i++) {
+      $helpers = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.ProcessName -match '^(_?Au_|uninstall)' -and $_.Path -and (
+          $_.Path.StartsWith($targetDir, [System.StringComparison]::OrdinalIgnoreCase) -or
+          $_.Path.StartsWith([System.IO.Path]::GetTempPath(), [System.StringComparison]::OrdinalIgnoreCase)
+        )
+      }
+      if (-not $helpers) { break }
+      Start-Sleep -Milliseconds 250
+    }
+
+    Start-Sleep -Milliseconds 300
+    $postHash = Get-ExeSha256 -path $launchExe
+    if (($null -eq $postHash) -or ($postHash -eq $preHash)) {
+      $regRoots = @(
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
+      )
+      $entry = Get-ItemProperty $regRoots -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq 'BitChord' } | Select-Object -First 1
+      if ($entry -and $entry.InstallLocation) {
+        $cleanLoc = $entry.InstallLocation.Trim().Trim('"')
+        $candidate = [System.IO.Path]::Combine($cleanLoc, [System.IO.Path]::GetFileName($TargetExe))
+        if (Test-Path -LiteralPath $candidate) {
+          $launchExe = $candidate
+          $postHash = Get-ExeSha256 -path $launchExe
+        }
       }
     }
+    $installSucceeded = ($exitCode -eq 0) -and ($null -ne $postHash) -and ($null -eq $preHash -or $postHash -ne $preHash)
+    Write-Log "NSIS verification launchExe=$launchExe preHash=$preHash postHash=$postHash installSucceeded=$installSucceeded"
+  } elseif ($Mode -eq 'msi_silent') {
+    $proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', "`"$SourcePath`"", '/qn', '/norestart') -PassThru -WindowStyle Hidden
+    $proc.WaitForExit()
+    $exitCode = $proc.ExitCode
+    Write-Log "MSI exited with code=$exitCode"
+    $postHash = Get-ExeSha256 -path $launchExe
+    $installSucceeded = (($exitCode -eq 0) -or ($exitCode -eq 3010)) -and ($null -ne $postHash)
   }
-  $installSucceeded = ($exitCode -eq 0) -and ($null -ne $postHash) -and ($null -eq $preHash -or $postHash -ne $preHash)
-  Write-Log "NSIS verification launchExe=$launchExe installSucceeded=$installSucceeded"
-} elseif ($Mode -eq 'msi_silent') {
-  $proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', "`"$SourcePath`"", '/qn', '/norestart') -PassThru -WindowStyle Hidden
-  $proc.WaitForExit()
-  $exitCode = $proc.ExitCode
-  Write-Log "MSI exited with code=$exitCode"
-  $postHash = Get-ExeSha256 -path $launchExe
-  $installSucceeded = (($exitCode -eq 0) -or ($exitCode -eq 3010)) -and ($null -ne $postHash)
-}
 
-if ($installSucceeded -and (Test-Path -LiteralPath $SourcePath)) {
-  Remove-Item -LiteralPath $SourcePath -Force -ErrorAction SilentlyContinue
-  Write-Log "Cleaned up installer cache $SourcePath"
-} else {
-  Write-Log "Kept installer cache installSucceeded=$installSucceeded"
+  if ($installSucceeded -and (Test-Path -LiteralPath $SourcePath)) {
+    Remove-Item -LiteralPath $SourcePath -Force -ErrorAction SilentlyContinue
+    Write-Log "Cleaned up installer cache $SourcePath"
+  } else {
+    Write-Log "Kept installer cache installSucceeded=$installSucceeded"
+  }
+} catch {
+  Write-Log "FATAL update error: $($_.Exception.Message)"
 }
 
 if (Wait-FileReadable -path $launchExe -maxAttempts 40) {
-  $launchDir = Split-Path -Parent $launchExe
+  $launchDir = [System.IO.Path]::GetDirectoryName($launchExe)
   Start-Process -FilePath $launchExe -WorkingDirectory $launchDir
   Write-Log "Relaunched $launchExe"
 } else {
@@ -1073,8 +1101,12 @@ pub fn apply_downloaded_update(path: &Path) -> Result<()> {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-        let target_exe = std::env::current_exe().context("Unable to locate running executable")?;
-        let script_path = canonical_dir.join("apply-update.ps1");
+        let clean_dir = strip_windows_verbatim_prefix(&canonical_dir);
+        let clean_source = strip_windows_verbatim_prefix(&canonical_file);
+        let target_exe = strip_windows_verbatim_prefix(
+            &std::env::current_exe().context("Unable to locate running executable")?,
+        );
+        let script_path = clean_dir.join("apply-update.ps1");
         fs::write(&script_path, build_apply_script_ps1())
             .context("Failed to write in-app self-update helper")?;
 
@@ -1092,7 +1124,7 @@ pub fn apply_downloaded_update(path: &Path) -> Result<()> {
             .arg("-TargetPid")
             .arg(std::process::id().to_string())
             .arg("-SourcePath")
-            .arg(&canonical_file)
+            .arg(&clean_source)
             .arg("-TargetExe")
             .arg(&target_exe)
             .arg("-Mode")
@@ -1274,5 +1306,23 @@ mod tests {
         assert!(build_apply_script_ps1().contains("Get-ExeSha256"));
         assert!(build_apply_script_ps1().contains("last-update.log"));
         assert!(build_apply_script_ps1().contains("if ($installSucceeded"));
+        assert!(build_apply_script_ps1().contains("Normalize-WinPath"));
+        assert!(!build_apply_script_ps1().contains("Join-Path"));
+    }
+
+    #[test]
+    fn strips_windows_verbatim_extended_path_prefixes() {
+        assert_eq!(
+            strip_windows_verbatim_prefix(Path::new(r"\\?\C:\Users\Test\BitChord_1.3.1_x64-setup.exe")),
+            PathBuf::from(r"C:\Users\Test\BitChord_1.3.1_x64-setup.exe")
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(Path::new(r"\\?\UNC\server\share\setup.exe")),
+            PathBuf::from(r"\\server\share\setup.exe")
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(Path::new(r"D:\Program File\BitChord\bitchord-desktop.exe")),
+            PathBuf::from(r"D:\Program File\BitChord\bitchord-desktop.exe")
+        );
     }
 }

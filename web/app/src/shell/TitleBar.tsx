@@ -6,7 +6,7 @@ import { useUi } from '@/state/ui';
 import { SidebarToggleButton } from './SidebarToggleButton';
 
 const captionBtn =
-  'grid h-9 w-[46px] place-items-center text-secondary transition-colors duration-100 hover:bg-quinary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-key';
+  'grid h-9 w-[46px] place-items-center text-secondary transition-colors duration-100 hover:bg-quinary hover:text-primary';
 
 export function TitleBar() {
   const [maximized, setMaximized] = useState(false);
@@ -53,7 +53,7 @@ export function TitleBar() {
         {hasPendingUpdate && !updateModalOpen && (
           <button
             type="button"
-            className="mr-1 inline-flex h-6 items-center gap-1 rounded-pill bg-key/18 px-2.5 text-[11px] font-semibold text-key transition-colors hover:bg-key/28 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-key"
+            className="mr-1 inline-flex h-6 items-center gap-1 rounded-pill bg-key/18 px-2.5 text-[11px] font-semibold text-key transition-colors hover:bg-key/28"
             aria-label="Open Software Update"
             title="Software Update available"
             onClick={() => setUpdateModalOpen(true)}
@@ -84,7 +84,7 @@ export function TitleBar() {
         </button>
         <button
           type="button"
-          className="grid h-9 w-[46px] place-items-center text-secondary transition-colors duration-100 hover:bg-red hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-key"
+          className="grid h-9 w-[46px] place-items-center text-secondary transition-colors duration-100 hover:bg-red hover:text-white"
           aria-label="Close window"
           onClick={() => void win.close()}
         >

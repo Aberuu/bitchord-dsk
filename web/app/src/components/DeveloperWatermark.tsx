@@ -60,8 +60,8 @@ export function DeveloperWatermark({ variant, version, compact = false }: Develo
           title={compact ? `${wm.credit} (${repoDisplay})` : wm.githubRepoUrl}
           className={
             compact
-              ? 'inline-flex min-h-[28px] flex-none items-center gap-1.5 rounded-[6px] px-1.5 py-0.5 text-secondary transition-colors hover:bg-quinary hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-key sm:size-8 sm:justify-center sm:rounded-nav sm:p-0'
-              : 'inline-flex min-h-[28px] flex-none items-center gap-1.5 rounded-[6px] px-1.5 py-0.5 text-secondary transition-colors hover:bg-quinary hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-key'
+              ? 'inline-flex min-h-[28px] flex-none items-center gap-1.5 rounded-[6px] px-1.5 py-0.5 text-secondary transition-colors hover:bg-quinary hover:text-primary sm:size-8 sm:justify-center sm:rounded-nav sm:p-0'
+              : 'inline-flex min-h-[28px] flex-none items-center gap-1.5 rounded-[6px] px-1.5 py-0.5 text-secondary transition-colors hover:bg-quinary hover:text-primary'
           }
         >
           <GitHubMark size={compact ? 14 : 13} />
@@ -80,7 +80,7 @@ export function DeveloperWatermark({ variant, version, compact = false }: Develo
           rel="noopener noreferrer"
           onClick={(ev) => handleExternalClick(ev, wm.githubProfileUrl)}
           data-watermark="visible"
-          className={`${settingsUi.integration} ${settingsUi.linkRow} min-h-[48px] no-underline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-key`}
+          className={`${settingsUi.integration} ${settingsUi.linkRow} min-h-[48px] no-underline`}
         >
           <span className={settingsUi.iconPlain}>
             <GitHubMark size={18} />
@@ -97,7 +97,7 @@ export function DeveloperWatermark({ variant, version, compact = false }: Develo
           target="_blank"
           rel="noopener noreferrer"
           onClick={(ev) => handleExternalClick(ev, wm.githubRepoUrl)}
-          className={`${settingsUi.integration} ${settingsUi.linkRow} min-h-[48px] no-underline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-key`}
+          className={`${settingsUi.integration} ${settingsUi.linkRow} min-h-[48px] no-underline`}
         >
           <span className={settingsUi.iconPlain}>
             <GitHubMark size={18} />
@@ -127,7 +127,7 @@ export function DeveloperWatermark({ variant, version, compact = false }: Develo
         target="_blank"
         rel="noopener noreferrer"
         onClick={(ev) => handleExternalClick(ev, wm.githubRepoUrl)}
-        className="inline-flex min-h-[44px] max-w-full items-center gap-1.5 rounded-pill px-3 py-2 text-secondary no-underline transition-colors hover:bg-quinary hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-key"
+        className="inline-flex min-h-[44px] max-w-full items-center gap-1.5 rounded-pill px-3 py-2 text-secondary no-underline transition-colors hover:bg-quinary hover:text-primary"
       >
         <GitHubMark size={14} />
         <span className="truncate underline decoration-divider underline-offset-4">{repoDisplay}</span>

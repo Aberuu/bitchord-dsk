@@ -492,12 +492,12 @@
     background-color: rgba(var(--keyColor-rgb), 0.3);
   }
 
-  :focus:not(:focus-visible) {
+  :focus {
     outline: none;
   }
 
-  :focus-visible {
-    outline: 2px solid var(--keyColor);
+  :root[data-input-modality='keyboard'] :focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--systemPrimary) 50%, transparent);
     outline-offset: 2px;
   }
 

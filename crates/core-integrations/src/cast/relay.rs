@@ -69,9 +69,14 @@ impl CastMediaRelay {
         let app = Router::new()
             .route(
                 "/cast/{token}/{filename}",
-                get(handle_media_get).head(handle_media_head),
+                get(handle_media_get)
+                    .head(handle_media_head)
+                    .options(handle_cors_preflight),
             )
-            .route("/cast/{token}/artwork", get(handle_artwork_get))
+            .route(
+                "/cast/{token}/artwork",
+                get(handle_artwork_get).options(handle_cors_preflight),
+            )
             .with_state(state);
 
         tokio::spawn(async move {
@@ -170,7 +175,24 @@ fn apply_dlna_headers(headers: &mut HeaderMap) {
         HeaderValue::from_static("DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"),
     );
     headers.insert("access-control-allow-origin", HeaderValue::from_static("*"));
+    headers.insert(
+        "access-control-allow-methods",
+        HeaderValue::from_static("GET, HEAD, OPTIONS"),
+    );
+    headers.insert(
+        "access-control-allow-headers",
+        HeaderValue::from_static("Range, Content-Type, Accept, Origin"),
+    );
     headers.insert("access-control-expose-headers", HeaderValue::from_static("*"));
+}
+
+async fn handle_cors_preflight() -> Response {
+    let mut headers = HeaderMap::new();
+    apply_dlna_headers(&mut headers);
+    let mut resp = Response::new(Body::empty());
+    *resp.status_mut() = StatusCode::NO_CONTENT;
+    *resp.headers_mut() = headers;
+    resp
 }
 
 fn is_allowed_remote_host(target: &Url, allow_loopback: bool) -> bool {
@@ -464,6 +486,17 @@ mod tests {
         let parsed = Url::parse(&url).unwrap();
         let path_part = parsed.path();
         let direct_url = format!("http://127.0.0.1:{local_port}{path_part}");
+
+        let preflight = client
+            .request(reqwest::Method::OPTIONS, &direct_url)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(preflight.status(), reqwest::StatusCode::NO_CONTENT);
+        assert_eq!(
+            preflight.headers().get("access-control-allow-origin").unwrap(),
+            "*"
+        );
 
         let ok_resp = client
             .get(&direct_url)

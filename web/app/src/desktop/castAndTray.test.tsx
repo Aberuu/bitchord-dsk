@@ -195,7 +195,7 @@ describe('System Tray default OFF preference and Cast to TV modal', () => {
       await Promise.resolve();
     });
     const stopBtn = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
-      b.textContent?.includes('Stop Casting & Play Here'),
+      b.textContent?.includes('Disconnect'),
     )!;
     expect(stopBtn).toBeTruthy();
 
@@ -208,9 +208,8 @@ describe('System Tray default OFF preference and Cast to TV modal', () => {
     expect(useCast.getState().session.connected).toBe(false);
   });
 
-  it('launches Windows Cast (Win + K) and Cast Settings buttons directly from CastModal and opens from PlayerBar', async () => {
+  it('shows minimalist Cast modal without FTI 331 copy, launches Windows Cast, and closes via Done', async () => {
     const winCastSpy = vi.spyOn(desktopApi, 'castOpenWindowsCast').mockResolvedValue(undefined);
-    const winSettingsSpy = vi.spyOn(desktopApi, 'castOpenWindowsCastSettings').mockResolvedValue(undefined);
     vi.spyOn(desktopApi, 'castDiscover').mockResolvedValue([]);
 
     useCast.setState({
@@ -250,23 +249,31 @@ describe('System Tray default OFF preference and Cast to TV modal', () => {
     });
 
     expect(useUi.getState().castModalOpen).toBe(true);
+    expect(host.textContent).toContain('Play on a Chromecast or Google Cast speaker');
+    expect(host.textContent).not.toContain('FTI 331');
+    expect(host.textContent).not.toContain('Wi-Fi Direct');
 
     const winCastBtn = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
-      b.textContent?.includes('Open Windows Cast (Win + K)'),
+      b.textContent?.includes('Windows Cast'),
     )!;
-    const settingsBtn = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
-      b.textContent?.includes('Cast Settings'),
+    const doneBtn = [...host.querySelectorAll<HTMLButtonElement>('button')].find(
+      (b) => b.textContent?.trim() === 'Done',
     )!;
     expect(winCastBtn).toBeTruthy();
-    expect(settingsBtn).toBeTruthy();
+    expect(doneBtn).toBeTruthy();
 
     await act(async () => {
       winCastBtn.click();
-      settingsBtn.click();
       await Promise.resolve();
     });
 
     expect(winCastSpy).toHaveBeenCalledTimes(1);
-    expect(winSettingsSpy).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      doneBtn.click();
+      await Promise.resolve();
+    });
+
+    expect(useUi.getState().castModalOpen).toBe(false);
   });
 });

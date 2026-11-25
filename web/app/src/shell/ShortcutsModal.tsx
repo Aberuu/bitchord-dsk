@@ -55,10 +55,10 @@ export function ShortcutsModal() {
 
 function ShortcutsModalContent() {
   const setOpen = useUi((s) => s.setShortcutsOpen);
-  const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    closeRef.current?.focus({ preventScroll: true });
+    dialogRef.current?.focus({ preventScroll: true });
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key === 'Escape') {
         ev.preventDefault();
@@ -80,7 +80,11 @@ function ShortcutsModalContent() {
         if (ev.target === ev.currentTarget) setOpen(false);
       }}
     >
-      <div className="flex max-h-[min(86vh,680px)] w-[min(560px,95vw)] flex-col overflow-hidden rounded-[22px] border border-search-border/70 bg-page text-primary shadow-[0_24px_64px_rgba(0,0,0,0.45)] animate-zoom">
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className="flex max-h-[min(86vh,680px)] w-[min(560px,95vw)] flex-col overflow-hidden rounded-[22px] border border-search-border/70 bg-page text-primary shadow-[0_24px_64px_rgba(0,0,0,0.45)] outline-none animate-zoom"
+      >
         <div className="flex items-center justify-between border-b border-search-border/50 px-5 py-4">
           <div className="flex items-center gap-2.5">
             <span className="grid size-8 place-items-center rounded-[10px] bg-quinary text-primary">
@@ -96,11 +100,10 @@ function ShortcutsModalContent() {
             </div>
           </div>
           <button
-            ref={closeRef}
             type="button"
             onClick={() => setOpen(false)}
             aria-label="Close keyboard shortcuts"
-            className="grid size-8 place-items-center rounded-full bg-quinary text-secondary transition-colors hover:bg-quaternary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-key"
+            className="grid size-8 place-items-center rounded-full bg-quinary text-secondary transition-colors hover:bg-quaternary hover:text-primary"
           >
             <X size={16} aria-hidden="true" />
           </button>
@@ -142,7 +145,7 @@ function ShortcutsModalContent() {
           <button
             type="button"
             onClick={() => setOpen(false)}
-            className="rounded-pill bg-quaternary px-4 py-1.5 type-callout-emphasized text-primary transition-colors hover:bg-tracklist-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-key"
+            className="rounded-pill bg-quaternary px-4 py-1.5 type-callout-emphasized text-primary transition-colors hover:bg-tracklist-hover"
           >
             Done
           </button>

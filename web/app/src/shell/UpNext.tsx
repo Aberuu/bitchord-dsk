@@ -104,7 +104,7 @@ function Row({
       <button
         type="button"
         data-drag-handle="true"
-        className="grid h-8 w-5 cursor-grab touch-none place-items-center rounded-[4px] text-tertiary transition-colors hover:text-primary group-hover/row:text-secondary focus-visible:text-key focus-visible:outline-2 focus-visible:outline-key active:cursor-grabbing"
+        className="grid h-8 w-5 cursor-grab touch-none place-items-center rounded-[4px] text-tertiary transition-colors hover:text-primary group-hover/row:text-secondary active:cursor-grabbing"
         aria-label={`Reorder ${track.title}. Press Alt+Up or Alt+Down to move.`}
         title="Drag to reorder (or Alt+Up / Alt+Down)"
         onKeyDown={(e) => {

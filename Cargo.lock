@@ -518,7 +518,7 @@ checksum = "72503af1e72be411d74ca45cd6b309878fcb35354e252fc2a3a8bda3a97082a0"
 
 [[package]]
 name = "bitchord-desktop"
-version = "1.3.1"
+version = "1.4.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1036,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "core-auth"
-version = "1.3.1"
+version = "1.4.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1063,7 +1063,7 @@ dependencies = [
 
 [[package]]
 name = "core-downloads"
-version = "1.3.1"
+version = "1.4.0"
 dependencies = [
  "anyhow",
  "core-auth",
@@ -1156,7 +1156,7 @@ dependencies = [
 
 [[package]]
 name = "core-integrations"
-version = "1.3.1"
+version = "1.4.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1188,7 +1188,7 @@ dependencies = [
 
 [[package]]
 name = "core-lyrics"
-version = "1.3.1"
+version = "1.4.0"
 dependencies = [
  "anyhow",
  "core-auth",
@@ -1199,7 +1199,7 @@ dependencies = [
 
 [[package]]
 name = "core-playback"
-version = "1.3.1"
+version = "1.4.0"
 dependencies = [
  "anyhow",
  "cc",
@@ -1219,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "core-sources"
-version = "1.3.1"
+version = "1.4.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1241,7 +1241,7 @@ dependencies = [
 
 [[package]]
 name = "core-stats"
-version = "1.3.1"
+version = "1.4.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1257,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "core-youtube"
-version = "1.3.1"
+version = "1.4.0"
 dependencies = [
  "anyhow",
  "axum",

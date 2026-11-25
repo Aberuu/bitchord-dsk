@@ -27,7 +27,13 @@ pub async fn discover_all_devices(http: &reqwest::Client, timeout_ms: u64) -> Ve
     );
 
     let mut merged: HashMap<String, CastDevice> = HashMap::new();
+    let mut seen_endpoints: HashSet<(CastProtocol, String, u16)> = HashSet::new();
     for dev in mdns_devices.into_iter().chain(dlna_devices.into_iter()) {
+        let ep = (dev.protocol, dev.host.clone(), dev.port);
+        if seen_endpoints.contains(&ep) {
+            continue;
+        }
+        seen_endpoints.insert(ep);
         merged.entry(dev.id.clone()).or_insert(dev);
     }
     let mut list: Vec<CastDevice> = merged.into_values().collect();
@@ -64,7 +70,7 @@ fn bind_mdns_multicast_listener(adapters: &[crate::cast::probe::LanAdapter]) -> 
     Ok(UdpSocket::from_std(std_sock)?)
 }
 
-fn build_mdns_ptr_query_with_mode(service_name: &str, unicast_response: bool) -> Vec<u8> {
+fn build_mdns_query(service_name: &str, qtype: u16, unicast_response: bool) -> Vec<u8> {
     let mut pkt = Vec::with_capacity(64);
     // Transaction ID=0, Flags=0 (standard query), QDCOUNT=1
     pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
@@ -74,11 +80,15 @@ fn build_mdns_ptr_query_with_mode(service_name: &str, unicast_response: bool) ->
         pkt.extend_from_slice(bytes);
     }
     pkt.push(0x00);
-    // QTYPE = PTR (12), QCLASS = IN (0x0001 QM or 0x8001 QU)
+    // QCLASS = IN (0x0001 QM or 0x8001 QU)
     let qclass: u16 = if unicast_response { 0x8001 } else { 0x0001 };
-    pkt.extend_from_slice(&[0x00, 0x0C]);
+    pkt.extend_from_slice(&qtype.to_be_bytes());
     pkt.extend_from_slice(&qclass.to_be_bytes());
     pkt
+}
+
+fn build_mdns_ptr_query_with_mode(service_name: &str, unicast_response: bool) -> Vec<u8> {
+    build_mdns_query(service_name, 12, unicast_response)
 }
 
 #[derive(Default)]
@@ -87,6 +97,8 @@ struct MdnsAccum {
     srvs: HashMap<String, (u16, String)>,
     txts: HashMap<String, HashMap<String, String>>,
     hosts_a: HashMap<String, Ipv4Addr>,
+    instance_peer_ips: HashMap<String, Ipv4Addr>,
+    target_peer_ips: HashMap<String, Ipv4Addr>,
 }
 
 fn read_dns_name(pkt: &[u8], mut offset: usize) -> Option<(String, usize)> {
@@ -144,10 +156,15 @@ fn parse_txt_record(rdata: &[u8]) -> HashMap<String, String> {
     out
 }
 
-fn ingest_mdns_packet(pkt: &[u8], accum: &mut MdnsAccum) {
+fn is_usable_peer_ipv4(ip: Ipv4Addr) -> bool {
+    !(ip.is_loopback() || ip.is_unspecified() || ip.is_link_local() || ip.is_multicast())
+}
+
+fn ingest_mdns_packet(pkt: &[u8], src_ip: Option<Ipv4Addr>, accum: &mut MdnsAccum) {
     if pkt.len() < 12 {
         return;
     }
+    let peer_ip = src_ip.filter(|ip| is_usable_peer_ipv4(*ip));
     let qdcount = u16::from_be_bytes([pkt[4], pkt[5]]) as usize;
     let ancount = u16::from_be_bytes([pkt[6], pkt[7]]) as usize;
     let nscount = u16::from_be_bytes([pkt[8], pkt[9]]) as usize;
@@ -186,21 +203,36 @@ fn ingest_mdns_packet(pkt: &[u8], accum: &mut MdnsAccum) {
             12 => {
                 // PTR
                 if let Some((target, _)) = read_dns_name(pkt, rdata_start) {
-                    accum.ptrs.push(target.trim_end_matches('.').to_string());
+                    let clean = target.trim_end_matches('.').to_string();
+                    let lower = clean.to_ascii_lowercase();
+                    if lower.ends_with("._googlecast._tcp.local") {
+                        if !accum.ptrs.iter().any(|p| p.eq_ignore_ascii_case(&clean)) {
+                            accum.ptrs.push(clean);
+                        }
+                        if let Some(ip) = peer_ip {
+                            accum.instance_peer_ips.entry(lower).or_insert(ip);
+                        }
+                    }
                 }
             }
             33 if rdata.len() >= 6 => {
                 // SRV
                 let port = u16::from_be_bytes([rdata[4], rdata[5]]);
                 if let Some((target, _)) = read_dns_name(pkt, rdata_start + 6) {
-                    accum
-                        .srvs
-                        .insert(key, (port, target.trim_end_matches('.').to_ascii_lowercase()));
+                    let target_lower = target.trim_end_matches('.').to_ascii_lowercase();
+                    accum.srvs.insert(key.clone(), (port, target_lower.clone()));
+                    if let Some(ip) = peer_ip {
+                        accum.instance_peer_ips.entry(key).or_insert(ip);
+                        accum.target_peer_ips.entry(target_lower).or_insert(ip);
+                    }
                 }
             }
             16 => {
                 // TXT
-                accum.txts.insert(key, parse_txt_record(rdata));
+                accum.txts.insert(key.clone(), parse_txt_record(rdata));
+                if let Some(ip) = peer_ip {
+                    accum.instance_peer_ips.entry(key).or_insert(ip);
+                }
             }
             1 if rdata.len() == 4 => {
                 // A
@@ -220,10 +252,15 @@ fn assemble_chromecast_devices(accum: &MdnsAccum) -> Vec<CastDevice> {
     let mut out = Vec::new();
     for instance in &accum.ptrs {
         let inst_lower = instance.to_ascii_lowercase();
-        let Some(&(port, ref target)) = accum.srvs.get(&inst_lower) else {
-            continue;
+        let (port, target_opt) = match accum.srvs.get(&inst_lower) {
+            Some((p, t)) => (*p, Some(t.as_str())),
+            None => (8009u16, None),
         };
-        let Some(ip) = accum.hosts_a.get(target) else {
+        let ip = target_opt
+            .and_then(|t| accum.hosts_a.get(t).copied())
+            .or_else(|| target_opt.and_then(|t| accum.target_peer_ips.get(t).copied()))
+            .or_else(|| accum.instance_peer_ips.get(&inst_lower).copied());
+        let Some(ip) = ip else {
             continue;
         };
         let txt = accum.txts.get(&inst_lower);
@@ -284,14 +321,18 @@ async fn discover_chromecast(
         listen_sockets.push(std::sync::Arc::new(mcast_sock));
     }
 
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<(Vec<u8>, Option<Ipv4Addr>)>(256);
     let mut reader_tasks = Vec::with_capacity(listen_sockets.len());
     for sock in listen_sockets {
         let tx_c = tx.clone();
         reader_tasks.push(tokio::spawn(async move {
             let mut buf = [0u8; 4096];
-            while let Ok((len, _)) = sock.recv_from(&mut buf).await {
-                if tx_c.send(buf[..len].to_vec()).await.is_err() {
+            while let Ok((len, addr)) = sock.recv_from(&mut buf).await {
+                let src_ip = match addr {
+                    SocketAddr::V4(v4) => Some(*v4.ip()),
+                    SocketAddr::V6(_) => None,
+                };
+                if tx_c.send((buf[..len].to_vec(), src_ip)).await.is_err() {
                     break;
                 }
             }
@@ -308,6 +349,8 @@ async fn discover_chromecast(
     let resend_at = tokio::time::Instant::now() + Duration::from_millis(450);
     let mut resent = false;
     let mut accum = MdnsAccum::default();
+    let mut queried_instances: HashSet<String> = HashSet::new();
+    let mut queried_targets: HashSet<String> = HashSet::new();
 
     loop {
         let now = tokio::time::Instant::now();
@@ -326,8 +369,33 @@ async fn discover_chromecast(
         } else {
             deadline - now
         };
-        if let Ok(Some(pkt)) = tokio::time::timeout(next_tick, rx.recv()).await {
-            ingest_mdns_packet(&pkt, &mut accum);
+        if let Ok(Some((pkt, src_ip))) = tokio::time::timeout(next_tick, rx.recv()).await {
+            ingest_mdns_packet(&pkt, src_ip, &mut accum);
+
+            // Follow up PTR-only answers with SRV/TXT queries and unresolved SRV targets with A queries.
+            for inst in &accum.ptrs {
+                let inst_lower = inst.to_ascii_lowercase();
+                if (!accum.srvs.contains_key(&inst_lower) || !accum.txts.contains_key(&inst_lower))
+                    && queried_instances.insert(inst_lower)
+                {
+                    let srv_q = build_mdns_query(inst, 33, true);
+                    let txt_q = build_mdns_query(inst, 16, true);
+                    for sock in &send_sockets {
+                        let _ = sock.send_to(&srv_q, target).await;
+                        let _ = sock.send_to(&txt_q, target).await;
+                    }
+                }
+            }
+            for (_, host_target) in accum.srvs.values() {
+                if !accum.hosts_a.contains_key(host_target)
+                    && queried_targets.insert(host_target.clone())
+                {
+                    let a_q = build_mdns_query(host_target, 1, true);
+                    for sock in &send_sockets {
+                        let _ = sock.send_to(&a_q, target).await;
+                    }
+                }
+            }
         }
     }
 
@@ -466,6 +534,70 @@ pub fn parse_upnp_description_xml(location: &str, xml: &str) -> Result<CastDevic
     })
 }
 
+pub fn parse_dial_chromecast_xml(location: &str, xml: &str) -> Option<CastDevice> {
+    let base_url = Url::parse(location).ok()?;
+    let host = base_url.host_str()?.to_string();
+    let lower_xml = xml.to_ascii_lowercase();
+    let is_cast_hint = base_url.port() == Some(8008)
+        || lower_xml.contains("eureka")
+        || lower_xml.contains("chromecast")
+        || lower_xml.contains("google inc")
+        || lower_xml.contains("google tv")
+        || lower_xml.contains("cast");
+    if !is_cast_hint {
+        return None;
+    }
+
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut stack: Vec<String> = Vec::new();
+    let mut friendly_name: Option<String> = None;
+    let mut manufacturer: Option<String> = None;
+    let mut model_name: Option<String> = None;
+    let mut udn: Option<String> = None;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => stack.push(e.name().as_ref().to_string()),
+            Ok(Event::End(_)) => {
+                stack.pop();
+            }
+            Ok(Event::Text(t)) => {
+                let raw = t.into_inner();
+                let val = quick_xml::escape::unescape(&raw)
+                    .map(|s| s.into_owned())
+                    .unwrap_or_else(|_| raw.into_owned());
+                if val.is_empty() || stack.iter().any(|s| s == "icon" || s == "service") {
+                    continue;
+                }
+                match stack.last().map(String::as_str).unwrap_or("") {
+                    "friendlyName" if friendly_name.is_none() => friendly_name = Some(val),
+                    "manufacturer" if manufacturer.is_none() => manufacturer = Some(val),
+                    "modelName" if model_name.is_none() => model_name = Some(val),
+                    "UDN" if udn.is_none() => udn = Some(val),
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+
+    let name = friendly_name.or_else(|| model_name.clone())?;
+    let id = udn.unwrap_or_else(|| format!("cast:{host}:8009"));
+    Some(CastDevice {
+        id: format!("chromecast:{id}"),
+        name,
+        model: model_name,
+        manufacturer: manufacturer.or_else(|| Some("Google Cast".to_string())),
+        protocol: CastProtocol::Chromecast,
+        host,
+        port: 8009,
+        av_transport_url: None,
+        rendering_control_url: None,
+    })
+}
+
 async fn discover_dlna(
     http: &reqwest::Client,
     adapters: &[crate::cast::probe::LanAdapter],
@@ -485,6 +617,7 @@ async fn discover_dlna(
     let search_targets = [
         "urn:schemas-upnp-org:device:MediaRenderer:1",
         "urn:schemas-upnp-org:service:AVTransport:1",
+        "urn:dial-multiscreen-org:service:dial:1",
         "upnp:rootdevice",
     ];
     let payloads: Vec<String> = search_targets
@@ -565,7 +698,10 @@ async fn discover_dlna(
                 .await
                 .ok()?;
             let xml = resp.text().await.ok()?;
-            parse_upnp_description_xml(&loc, &xml).ok()
+            if let Ok(dlna) = parse_upnp_description_xml(&loc, &xml) {
+                return Some(dlna);
+            }
+            parse_dial_chromecast_xml(&loc, &xml)
         });
     }
 
@@ -644,7 +780,7 @@ mod tests {
         pkt.extend_from_slice(&[192, 168, 1, 88]);
 
         let mut accum = MdnsAccum::default();
-        ingest_mdns_packet(&pkt, &mut accum);
+        ingest_mdns_packet(&pkt, None, &mut accum);
         let devices = assemble_chromecast_devices(&accum);
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].name, "Living Room TV");
@@ -652,6 +788,64 @@ mod tests {
         assert_eq!(devices[0].host, "192.168.1.88");
         assert_eq!(devices[0].port, 8009);
         assert_eq!(devices[0].protocol, CastProtocol::Chromecast);
+    }
+
+    #[test]
+    fn falls_back_to_sender_ip_when_mdns_omits_a_record() {
+        let mut pkt = vec![0u8; 12];
+        // ANCOUNT = 2 (PTR + TXT only, no SRV or A)
+        pkt[6] = 0;
+        pkt[7] = 2;
+
+        let service = "_googlecast._tcp.local";
+        let instance = "Bedroom-Speaker._googlecast._tcp.local";
+
+        pkt.extend_from_slice(&encode_dns_name(service));
+        pkt.extend_from_slice(&12u16.to_be_bytes());
+        pkt.extend_from_slice(&1u16.to_be_bytes());
+        pkt.extend_from_slice(&120u32.to_be_bytes());
+        let ptr_target = encode_dns_name(instance);
+        pkt.extend_from_slice(&(ptr_target.len() as u16).to_be_bytes());
+        pkt.extend_from_slice(&ptr_target);
+
+        pkt.extend_from_slice(&encode_dns_name(instance));
+        pkt.extend_from_slice(&16u16.to_be_bytes());
+        pkt.extend_from_slice(&1u16.to_be_bytes());
+        pkt.extend_from_slice(&120u32.to_be_bytes());
+        let mut txt_raw = Vec::new();
+        for item in ["id=spk9", "fn=Bedroom Speaker", "md=Nest Audio"] {
+            txt_raw.push(item.len() as u8);
+            txt_raw.extend_from_slice(item.as_bytes());
+        }
+        pkt.extend_from_slice(&(txt_raw.len() as u16).to_be_bytes());
+        pkt.extend_from_slice(&txt_raw);
+
+        let mut accum = MdnsAccum::default();
+        ingest_mdns_packet(&pkt, Some(Ipv4Addr::new(192, 168, 1, 77)), &mut accum);
+        let devices = assemble_chromecast_devices(&accum);
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].name, "Bedroom Speaker");
+        assert_eq!(devices[0].host, "192.168.1.77");
+        assert_eq!(devices[0].port, 8009);
+    }
+
+    #[test]
+    fn parses_dial_ssdp_chromecast_description_xml() {
+        let xml = r#"<?xml version="1.0"?>
+<root xmlns="urn:schemas-upnp-org:device-1-0">
+  <device>
+    <friendlyName>Studio Chromecast</friendlyName>
+    <manufacturer>Google Inc.</manufacturer>
+    <modelName>Eureka Dongle</modelName>
+    <UDN>uuid:cast-001</UDN>
+  </device>
+</root>"#;
+        let dev = parse_dial_chromecast_xml("http://192.168.1.60:8008/ssdp/device-desc.xml", xml)
+            .expect("parse dial chromecast");
+        assert_eq!(dev.protocol, CastProtocol::Chromecast);
+        assert_eq!(dev.name, "Studio Chromecast");
+        assert_eq!(dev.host, "192.168.1.60");
+        assert_eq!(dev.port, 8009);
     }
 
     #[test]

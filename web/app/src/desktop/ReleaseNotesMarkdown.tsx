@@ -108,7 +108,7 @@ function renderInline(text: string): ReactNode[] {
       tokens.push(
         <code
           key={keyIdx++}
-          className="rounded-[5px] border border-(--labelDivider) bg-page/75 px-1.5 py-0.5 font-mono text-[11.5px] text-primary"
+          className="rounded-[5px] bg-primary/8 px-1.5 py-[1px] font-mono text-[12px] text-primary/90 [overflow-wrap:anywhere]"
         >
           {raw.slice(1, -1)}
         </code>,
