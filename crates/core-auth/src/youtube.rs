@@ -138,15 +138,37 @@ impl YouTubeAuthService {
     }
 
     pub fn save_cookies(&self, cookie_header: Option<String>) -> Result<()> {
-        self.vault.update(|data| {
-            data.yt_cookie_header = cookie_header.filter(|c| !c.trim().is_empty());
-            data.yt_connected = true;
-        })?;
+        self.save_session(cookie_header, None, true, "google")
+    }
+
+    pub fn save_session(
+        &self,
+        cookie_header: Option<String>,
+        selected_channel_id: Option<String>,
+        keep_signed_in: bool,
+        source: &str,
+    ) -> Result<()> {
+        let clean = cookie_header.filter(|c| !c.trim().is_empty());
+        if keep_signed_in {
+            self.vault.clear_ephemeral_auth();
+            self.vault.update(|data| {
+                data.yt_cookie_header = clean;
+                data.yt_connected = true;
+                if let Some(ch) = selected_channel_id {
+                    data.yt_selected_channel_id = Some(ch);
+                }
+            })?;
+        } else {
+            let existing_sp = self.vault.ephemeral_snapshot().and_then(|e| e.spotify_sp_dc);
+            self.vault
+                .set_ephemeral_auth(clean, selected_channel_id, existing_sp, source);
+        }
         self.invalidate_cache();
         Ok(())
     }
 
     pub fn sign_out(&self) -> Result<()> {
+        self.vault.clear_ephemeral_auth();
         self.vault.update(|data| {
             data.yt_cookie_header = None;
             data.yt_selected_channel_id = None;
@@ -208,16 +230,20 @@ impl YouTubeAuthService {
         if !exists {
             return Err(anyhow!("No channel {channel_id} found for the signed-in session"));
         }
-        self.vault.update(|data| {
-            data.yt_selected_channel_id = Some(channel_id.to_string());
-        })?;
+        if !self.vault.update_ephemeral_channel(Some(channel_id.to_string())) {
+            self.vault.update(|data| {
+                data.yt_selected_channel_id = Some(channel_id.to_string());
+            })?;
+        }
         Ok(self.auth_state(false).await)
     }
 
     pub async fn set_connected(&self, connected: bool) -> Result<YtAuthState> {
-        self.vault.update(|data| {
-            data.yt_connected = connected;
-        })?;
+        if !self.vault.update_ephemeral_connected(connected) {
+            self.vault.update(|data| {
+                data.yt_connected = connected;
+            })?;
+        }
         Ok(self.auth_state(connected).await)
     }
 

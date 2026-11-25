@@ -152,9 +152,28 @@ impl Default for VaultData {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DesktopSessionPersistence {
+    SignedOut,
+    Temporary,
+    Persistent,
+}
+
+#[derive(Debug, Clone)]
+pub struct EphemeralSessionOverlay {
+    pub yt_cookie_header: Option<String>,
+    pub yt_connected: bool,
+    pub yt_selected_channel_id: Option<String>,
+    pub spotify_sp_dc: Option<String>,
+    pub spotify_connected: bool,
+    pub source: String,
+}
+
 pub struct SecretVault {
     path: PathBuf,
     data: RwLock<VaultData>,
+    ephemeral: RwLock<Option<EphemeralSessionOverlay>>,
 }
 
 impl SecretVault {
@@ -182,11 +201,129 @@ impl SecretVault {
         Ok(Self {
             path,
             data: RwLock::new(data),
+            ephemeral: RwLock::new(None),
         })
     }
 
     pub fn snapshot(&self) -> VaultData {
-        self.data.read().clone()
+        let mut snap = self.data.read().clone();
+        if let Some(eph) = self.ephemeral.read().as_ref() {
+            snap.yt_cookie_header = eph.yt_cookie_header.clone();
+            snap.yt_connected = eph.yt_connected;
+            snap.yt_selected_channel_id = eph.yt_selected_channel_id.clone();
+            if eph.spotify_sp_dc.is_some() {
+                snap.spotify_sp_dc = eph.spotify_sp_dc.clone();
+                snap.spotify_connected = eph.spotify_connected;
+            }
+        }
+        snap
+    }
+
+    pub fn ephemeral_snapshot(&self) -> Option<EphemeralSessionOverlay> {
+        self.ephemeral.read().clone()
+    }
+
+    pub fn restore_ephemeral(&self, overlay: Option<EphemeralSessionOverlay>) {
+        *self.ephemeral.write() = overlay;
+    }
+
+    pub fn set_ephemeral_auth(
+        &self,
+        yt_cookie_header: Option<String>,
+        yt_selected_channel_id: Option<String>,
+        spotify_sp_dc: Option<String>,
+        source: impl Into<String>,
+    ) {
+        let clean_yt = yt_cookie_header.filter(|c| !c.trim().is_empty());
+        let clean_sp = spotify_sp_dc.filter(|c| !c.trim().is_empty());
+        *self.ephemeral.write() = Some(EphemeralSessionOverlay {
+            yt_cookie_header: clean_yt,
+            yt_connected: true,
+            yt_selected_channel_id,
+            spotify_sp_dc: clean_sp,
+            spotify_connected: true,
+            source: source.into(),
+        });
+    }
+
+    pub fn update_ephemeral_spotify(&self, sp_dc: Option<String>, connected: bool) -> bool {
+        let mut guard = self.ephemeral.write();
+        let Some(eph) = guard.as_mut() else {
+            return false;
+        };
+        if let Some(val) = sp_dc {
+            let trimmed = val.trim().to_string();
+            eph.spotify_sp_dc = if trimmed.is_empty() { None } else { Some(trimmed) };
+        }
+        eph.spotify_connected = connected;
+        true
+    }
+
+    pub fn update_ephemeral_channel(&self, channel_id: Option<String>) -> bool {
+        let mut guard = self.ephemeral.write();
+        let Some(eph) = guard.as_mut() else {
+            return false;
+        };
+        eph.yt_selected_channel_id = channel_id;
+        true
+    }
+
+    pub fn update_ephemeral_connected(&self, connected: bool) -> bool {
+        let mut guard = self.ephemeral.write();
+        let Some(eph) = guard.as_mut() else {
+            return false;
+        };
+        eph.yt_connected = connected;
+        true
+    }
+
+    pub fn clear_ephemeral_auth(&self) {
+        *self.ephemeral.write() = None;
+    }
+
+    pub fn promote_ephemeral_to_persistent(&self) -> Result<bool> {
+        let Some(eph) = self.ephemeral.read().clone() else {
+            return Ok(false);
+        };
+        self.update(|data| {
+            if eph.yt_cookie_header.is_some() {
+                data.yt_cookie_header = eph.yt_cookie_header.clone();
+                data.yt_connected = eph.yt_connected;
+                data.yt_selected_channel_id = eph.yt_selected_channel_id.clone();
+            }
+            if eph.spotify_sp_dc.is_some() {
+                data.spotify_sp_dc = eph.spotify_sp_dc.clone();
+                data.spotify_connected = eph.spotify_connected;
+            }
+        })?;
+        self.clear_ephemeral_auth();
+        Ok(true)
+    }
+
+    pub fn session_persistence(&self) -> DesktopSessionPersistence {
+        if let Some(eph) = self.ephemeral.read().as_ref() {
+            if eph
+                .yt_cookie_header
+                .as_deref()
+                .is_some_and(|c| !c.trim().is_empty())
+            {
+                return DesktopSessionPersistence::Temporary;
+            }
+        }
+        if self
+            .data
+            .read()
+            .yt_cookie_header
+            .as_deref()
+            .is_some_and(|c| !c.trim().is_empty())
+        {
+            return DesktopSessionPersistence::Persistent;
+        }
+        DesktopSessionPersistence::SignedOut
+    }
+
+    pub fn ephemeral_source(&self) -> Option<String> {
+        self.ephemeral.read().as_ref().map(|e| e.source.clone())
     }
 
     pub fn update<F>(&self, mutate: F) -> Result<VaultData>
@@ -310,5 +447,50 @@ mod tests {
         let cipher = protect_bytes(secret).expect("protect");
         let plain = unprotect_bytes(&cipher).expect("unprotect");
         assert_eq!(plain, secret);
+    }
+
+    #[test]
+    fn ephemeral_session_never_writes_to_disk_until_promoted() {
+        let dir = std::env::temp_dir().join(format!("bitchord-eph-vault-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("vault.bin");
+
+        let vault = SecretVault::open_at(path.clone()).expect("open clean");
+        assert_eq!(vault.session_persistence(), DesktopSessionPersistence::SignedOut);
+
+        vault.set_ephemeral_auth(
+            Some("SAPISID=temp_secret".into()),
+            Some("0:own".into()),
+            Some("sp_dc_temp".into()),
+            "qr",
+        );
+        assert_eq!(vault.session_persistence(), DesktopSessionPersistence::Temporary);
+        assert_eq!(vault.ephemeral_source().as_deref(), Some("qr"));
+        assert_eq!(vault.snapshot().yt_cookie_header.as_deref(), Some("SAPISID=temp_secret"));
+        assert!(!path.exists(), "temporary session must never create vault.bin on disk");
+
+        // Reopening fresh simulates closing and reopening BitChord: temporary session is gone.
+        let reopened = SecretVault::open_at(path.clone()).expect("reopen");
+        assert_eq!(reopened.session_persistence(), DesktopSessionPersistence::SignedOut);
+        assert!(reopened.snapshot().yt_cookie_header.is_none());
+
+        // Promoting temporary session writes encrypted vault.bin to disk.
+        assert!(vault.promote_ephemeral_to_persistent().expect("promote"));
+        assert_eq!(vault.session_persistence(), DesktopSessionPersistence::Persistent);
+        assert!(path.exists());
+
+        let persisted = SecretVault::open_at(path.clone()).expect("reopen promoted");
+        assert_eq!(persisted.session_persistence(), DesktopSessionPersistence::Persistent);
+        assert_eq!(
+            persisted.snapshot().yt_cookie_header.as_deref(),
+            Some("SAPISID=temp_secret")
+        );
+        assert_eq!(
+            persisted.snapshot().spotify_sp_dc.as_deref(),
+            Some("sp_dc_temp")
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

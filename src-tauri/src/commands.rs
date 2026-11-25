@@ -2,12 +2,16 @@ use crate::auth_windows::{open_discord_login, open_spotify_login, open_youtube_l
 use crate::updater::{self, UpdateCheckResult, UpdaterPrefsPayload};
 use crate::{shutdown_and_exit, tray, AppState};
 use base64::Engine;
-use core_auth::{app_data_dir, StoredAddonConfig, YtFetchParams};
+use core_auth::{
+    app_data_dir, current_epoch_ms, decode_one_key, encode_one_key, DesktopSessionPersistence,
+    OneKeyPayload, StoredAddonConfig, YtAuthState, YtFetchParams,
+};
 use core_downloads::{DownloadRequest, DownloadedTrack, LocalTrack};
 use core_integrations::{
-    CastDevice, CastLoadRequest, CastSessionState, CastSupportStatus, DiscordNowPlaying,
-    DiscordPresenceOptions, LastFmTokenAuth, MobileNowPlaying, MobileSyncStatus,
-    ScrobbleConfigUpdate, ScrobbleState, ScrobbleTrack, SmtcMetadata, SmtcPlayback,
+    push_session_to_peer, CastDevice, CastLoadRequest, CastSessionState, CastSupportStatus,
+    DiscordNowPlaying, DiscordPresenceOptions, LastFmTokenAuth, MobileNowPlaying, MobileSyncStatus,
+    QuickLoginStatus, ScrobbleConfigUpdate, ScrobbleState, ScrobbleTrack, SmtcMetadata,
+    SmtcPlayback,
 };
 use core_lyrics::HttpRequestParams;
 use core_playback::{
@@ -277,8 +281,8 @@ pub async fn bridge_call(
 }
 
 #[tauri::command]
-pub async fn open_yt_sign_in(app: AppHandle) -> Result<(), String> {
-    open_youtube_login(&app).map_err(|e| e.to_string())
+pub async fn open_yt_sign_in(keep_signed_in: Option<bool>, app: AppHandle) -> Result<(), String> {
+    open_youtube_login(&app, keep_signed_in.unwrap_or(true)).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -286,7 +290,233 @@ pub async fn sign_out_yt(app: AppHandle, state: State<'_, AppState>) -> Result<(
     state.yt_auth.sign_out().map_err(|e| e.to_string())?;
     let auth = state.yt_auth.auth_state(false).await;
     let _ = app.emit("bridge://event", json!({ "event": "yt.authState", "data": auth }));
+    let sp_auth = state.spotify.auth_state(false).await;
+    let _ = app.emit(
+        "bridge://event",
+        json!({ "event": "spotify.authState", "data": sp_auth }),
+    );
+    let _ = app.emit("auth://session-meta-changed", json!({}));
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopSessionMeta {
+    pub persistence: DesktopSessionPersistence,
+    pub source: Option<String>,
+    pub skip_sign_in_prompt: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedOneKeyPayload {
+    pub key: String,
+    pub has_pin: bool,
+    pub expires_at_ms: Option<i64>,
+    pub include_spotify: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnlockWithOneKeyResult {
+    pub auth: YtAuthState,
+    pub persistence: DesktopSessionPersistence,
+}
+
+fn build_session_meta(state: &AppState) -> DesktopSessionMeta {
+    DesktopSessionMeta {
+        persistence: state.vault.session_persistence(),
+        source: state.vault.ephemeral_source(),
+        skip_sign_in_prompt: state.prefs.lock().skip_sign_in_prompt,
+    }
+}
+
+#[tauri::command]
+pub fn auth_get_session_meta(state: State<'_, AppState>) -> DesktopSessionMeta {
+    build_session_meta(&state)
+}
+
+#[tauri::command]
+pub fn auth_set_skip_sign_in_prompt(
+    skip: bool,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<DesktopSessionMeta, String> {
+    let snapshot = {
+        let mut prefs = state.prefs.lock();
+        prefs.skip_sign_in_prompt = skip;
+        prefs.clone()
+    };
+    snapshot
+        .save_to(&state.prefs_path)
+        .map_err(|e| format!("Failed to persist sign-in prompt setting: {e}"))?;
+    let _ = app.emit("auth://session-meta-changed", json!({}));
+    Ok(build_session_meta(&state))
+}
+
+#[tauri::command]
+pub fn auth_promote_temporary_session(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<DesktopSessionMeta, String> {
+    state
+        .vault
+        .promote_ephemeral_to_persistent()
+        .map_err(|e| format!("Failed to save temporary session: {e}"))?;
+    let _ = app.emit("auth://session-meta-changed", json!({}));
+    Ok(build_session_meta(&state))
+}
+
+#[tauri::command]
+pub fn auth_generate_one_key(
+    include_spotify: bool,
+    ttl_minutes: Option<u64>,
+    pin: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<GeneratedOneKeyPayload, String> {
+    let snap = state.vault.snapshot();
+    let yt_cookie = snap
+        .yt_cookie_header
+        .filter(|c| !c.trim().is_empty())
+        .ok_or_else(|| "Sign in to YouTube Music first before generating a 1-Key Session.".to_string())?;
+    let issued_at_ms = current_epoch_ms();
+    let expires_at_ms = ttl_minutes
+        .filter(|m| *m > 0)
+        .map(|mins| issued_at_ms + (mins as i64) * 60_000);
+    let spotify_sp_dc = if include_spotify {
+        snap.spotify_sp_dc.filter(|s| !s.trim().is_empty())
+    } else {
+        None
+    };
+    let payload = OneKeyPayload {
+        v: 1,
+        yt_cookie_header: yt_cookie,
+        yt_selected_channel_id: snap.yt_selected_channel_id,
+        spotify_sp_dc: spotify_sp_dc.clone(),
+        issued_at_ms,
+        expires_at_ms,
+    };
+    let clean_pin = pin.as_deref().map(str::trim).filter(|p| !p.is_empty());
+    let key = encode_one_key(&payload, clean_pin).map_err(|e| e.to_string())?;
+    Ok(GeneratedOneKeyPayload {
+        key,
+        has_pin: clean_pin.is_some(),
+        expires_at_ms,
+        include_spotify: spotify_sp_dc.is_some(),
+    })
+}
+
+#[tauri::command]
+pub async fn auth_unlock_with_one_key(
+    key: String,
+    pin: Option<String>,
+    keep_signed_in: bool,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<UnlockWithOneKeyResult, String> {
+    let decoded = decode_one_key(&key, pin.as_deref()).map_err(|e| e.to_string())?;
+    let prev_data = state.vault.snapshot();
+    let prev_eph = state.vault.ephemeral_snapshot();
+
+    state
+        .yt_auth
+        .save_session(
+            Some(decoded.yt_cookie_header),
+            decoded.yt_selected_channel_id,
+            keep_signed_in,
+            "one_key",
+        )
+        .map_err(|e| e.to_string())?;
+    if let Some(ref sp) = decoded.spotify_sp_dc {
+        let _ = state.spotify.save_session(Some(sp.clone()), keep_signed_in);
+    }
+
+    let auth = state.yt_auth.auth_state(true).await;
+    if !auth.signed_in {
+        state.vault.restore_ephemeral(prev_eph);
+        if keep_signed_in {
+            let _ = state.vault.update(|d| {
+                d.yt_cookie_header = prev_data.yt_cookie_header;
+                d.yt_connected = prev_data.yt_connected;
+                d.yt_selected_channel_id = prev_data.yt_selected_channel_id;
+            });
+        }
+        state.yt_auth.invalidate_cache();
+        return Err(auth
+            .problem
+            .unwrap_or_else(|| "YouTube rejected the provided 1-Key Session.".to_string()));
+    }
+
+    let _ = app.emit("bridge://event", json!({ "event": "yt.authState", "data": auth }));
+    if decoded.spotify_sp_dc.is_some() {
+        let sp_auth = state.spotify.auth_state(true).await;
+        let _ = app.emit(
+            "bridge://event",
+            json!({ "event": "spotify.authState", "data": sp_auth }),
+        );
+    }
+    let _ = app.emit("auth://session-meta-changed", json!({}));
+
+    Ok(UnlockWithOneKeyResult {
+        auth,
+        persistence: state.vault.session_persistence(),
+    })
+}
+
+#[tauri::command]
+pub async fn auth_quick_login_start(
+    keep_signed_in: bool,
+    state: State<'_, AppState>,
+) -> Result<QuickLoginStatus, String> {
+    state
+        .quick_login
+        .start(keep_signed_in)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn auth_quick_login_set_keep(
+    keep_signed_in: bool,
+    state: State<'_, AppState>,
+) -> QuickLoginStatus {
+    state.quick_login.set_keep_signed_in(keep_signed_in)
+}
+
+#[tauri::command]
+pub fn auth_quick_login_stop(state: State<'_, AppState>) -> QuickLoginStatus {
+    state.quick_login.stop()
+}
+
+#[tauri::command]
+pub async fn auth_quick_login_approve_peer(
+    peer_url: String,
+    code: String,
+    include_spotify: bool,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let snap = state.vault.snapshot();
+    let yt_cookie = snap
+        .yt_cookie_header
+        .filter(|c| !c.trim().is_empty())
+        .ok_or_else(|| "Sign in to YouTube Music on this PC first.".to_string())?;
+    let issued_at_ms = current_epoch_ms();
+    let payload = OneKeyPayload {
+        v: 1,
+        yt_cookie_header: yt_cookie,
+        yt_selected_channel_id: snap.yt_selected_channel_id,
+        spotify_sp_dc: if include_spotify {
+            snap.spotify_sp_dc.filter(|s| !s.trim().is_empty())
+        } else {
+            None
+        },
+        issued_at_ms,
+        expires_at_ms: Some(issued_at_ms + 5 * 60_000),
+    };
+    let one_key = encode_one_key(&payload, None).map_err(|e| e.to_string())?;
+    push_session_to_peer(&state.http, &peer_url, &code, &one_key)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

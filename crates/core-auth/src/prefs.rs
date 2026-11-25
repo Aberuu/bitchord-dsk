@@ -22,6 +22,8 @@ pub struct DesktopPrefs {
     pub skipped_version: Option<String>,
     #[serde(default)]
     pub mobile_sync_port: Option<u16>,
+    #[serde(default)]
+    pub skip_sign_in_prompt: bool,
 }
 
 impl Default for DesktopPrefs {
@@ -33,6 +35,7 @@ impl Default for DesktopPrefs {
             update_feed_url: None,
             skipped_version: None,
             mobile_sync_port: None,
+            skip_sign_in_prompt: false,
         }
     }
 }
@@ -121,6 +124,7 @@ mod tests {
             update_feed_url: Some("http://127.0.0.1:8787/releases.json".into()),
             skipped_version: Some("0.9.0".into()),
             mobile_sync_port: Some(48221),
+            skip_sign_in_prompt: true,
         }
         .save_to(&path)
         .expect("save custom");
@@ -134,6 +138,7 @@ mod tests {
         );
         assert_eq!(loaded.skipped_version.as_deref(), Some("0.9.0"));
         assert_eq!(loaded.mobile_sync_port, Some(48221));
+        assert!(loaded.skip_sign_in_prompt);
 
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }

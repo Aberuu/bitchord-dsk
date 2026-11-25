@@ -4,8 +4,8 @@
 
 **A modern, lightweight YouTube Music desktop player for Windows, engineered with Rust and Tauri 2.**
 
-[![Release](https://img.shields.io/badge/Release-v1.1.1-10b981?logo=github&logoColor=white)](https://github.com/Aberuu/bitchord-dsk/releases)
-[![Status](https://img.shields.io/badge/Status-v1.1.1%20Release-brightgreen)]()
+[![Release](https://img.shields.io/badge/Release-v1.2.0-10b981?logo=github&logoColor=white)](https://github.com/Aberuu/bitchord-dsk/releases)
+[![Status](https://img.shields.io/badge/Status-v1.2.0%20Release-brightgreen)]()
 [![Rust](https://img.shields.io/badge/Rust-2021%20Edition-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-v2-24C8D8?logo=tauri&logoColor=white)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-v19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
@@ -17,8 +17,8 @@
 ---
 
 > [!NOTE]
-> ### 🎉 Release `v1.1.1`
-> **BitChord Desktop v1.1.1 is now available for Windows!**
+> ### 🎉 Release `v1.2.0`
+> **BitChord Desktop v1.2.0 is now available for Windows!**
 > Full native Rust/Tauri 2 playback pipeline (CPAL/WASAPI/ASIO & DSD DoP), Bit-Perfect bypass, 10-band Web Audio EQ, synced lyrics, listening stats & Replay, CastV2/DLNA, external sources (`core-sources`), mobile sync, auto-updater, and deep Windows integration.
 
 ---
@@ -29,7 +29,7 @@
 
 ---
 
-## 🚦 Release & Feature Status (`v1.1.1`)
+## 🚦 Release & Feature Status (`v1.2.0`)
 
 | Feature | Status | Notes |
 |---|---|---|
@@ -39,7 +39,7 @@
 | **Audio Pipeline Inspector**| 🟢 Ready | Real-time monitoring of sample rate, channels, bit depth, and buffer size |
 | **Synced Lyrics** | 🟢 Ready | Side panel drawer & full-screen view (LRCLIB, Kugou, YouTube captions) |
 | **Windows SMTC Integration**| 🟢 Ready | Hardware media keys, volume overlay, and taskbar thumbnail previews |
-| **Windows DPAPI Security** | 🟢 Ready | Hardware-backed `CryptProtectData` encryption for YouTube session tokens |
+| **Windows DPAPI & Quick Sign-In** | 🟢 Ready | Hardware-backed `CryptProtectData` vault, QR Quick Sign-In (`QuickSignInModal`), and One-Key Session export/import |
 | **Listening Stats & Replay** | 🟢 Ready | SQLite-backed listening tracker, top songs/artists, and Replay cards |
 | **Search & UpNext Queue** | 🟢 Ready | Search options, shortcut quick-select, and dynamic queue timeline |
 | **Listen Together & Mobile Sync** | 🟢 Ready | WebSocket party synchronization, clock drift compensation, and mobile playback/stats sync |
@@ -260,7 +260,10 @@ target/release/bundle/nsis/
 
 ## 📦 Release History
 
-### `v1.1.1` (Current Release)
+### `v1.2.0` (Current Release — Medium)
+- **Quick Sign-In & One-Key Session:** Added QR-based Quick Sign-In (`quick_login.rs`, `QuickSignInModal`, `QrCodeSvg`), One-Key Session key (`session_key.rs`, `OneKeySessionSection`), and enhanced DPAPI vault & auth flows (`vault.rs`, `youtube.rs`, `spotify.rs`).
+
+### `v1.1.1`
 - **Session & Output Defaults:** Refined session & audio output defaults (`player.ts`, `sessionAndOutputDefaults.test.ts`), `useScrubber`, `AppShell`, `routes.tsx`, and Tauri `lib.rs` initialization.
 - **Workspace Customizations:** Added `.agents/rules/push-and-release.md` and `.agents/skills/bitchord-release-build/SKILL.md`.
 

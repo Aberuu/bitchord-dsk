@@ -24,6 +24,7 @@ import { PlayerBar } from './PlayerBar';
 import { ShortcutsModal } from './ShortcutsModal';
 import { Sidebar } from './Sidebar';
 import { SidebarToggleButton } from './SidebarToggleButton';
+import { QuickSignInModal } from '@/desktop/QuickSignInModal';
 import { SidePanel } from './SidePanel';
 import { TitleBar } from './TitleBar';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
@@ -156,6 +157,7 @@ export function AppShell() {
       <AudioPipelineDialog />
       <CastModal />
       <ShortcutsModal />
+      <QuickSignInModal />
       <UpdateBannerAndGate />
     </div>
   );

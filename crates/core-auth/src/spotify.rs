@@ -138,8 +138,17 @@ impl SpotifyService {
     }
 
     pub fn save_sp_dc(&self, sp_dc: Option<String>) -> Result<()> {
+        self.save_session(sp_dc, true)
+    }
+
+    pub fn save_session(&self, sp_dc: Option<String>, keep_signed_in: bool) -> Result<()> {
+        let clean = sp_dc.filter(|s| !s.trim().is_empty());
+        if !keep_signed_in && self.vault.update_ephemeral_spotify(clean.clone(), true) {
+            self.invalidate_session();
+            return Ok(());
+        }
         self.vault.update(|data| {
-            data.spotify_sp_dc = sp_dc.filter(|s| !s.trim().is_empty());
+            data.spotify_sp_dc = clean;
             data.spotify_connected = true;
         })?;
         self.invalidate_session();
@@ -154,9 +163,11 @@ impl SpotifyService {
     }
 
     pub async fn set_connected(&self, connected: bool) -> Result<SpotifyAuthState> {
-        self.vault.update(|data| {
-            data.spotify_connected = connected;
-        })?;
+        if !self.vault.update_ephemeral_spotify(None, connected) {
+            self.vault.update(|data| {
+                data.spotify_connected = connected;
+            })?;
+        }
         self.invalidate_session();
         Ok(self.auth_state(false).await)
     }

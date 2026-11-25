@@ -1,8 +1,10 @@
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowUpRight, ChevronsUpDown, User } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { Menu, MenuHeader, MenuItem, MenuSeparator } from '@/components/Menu';
 import { desktopApi, isTauriDesktop } from '@/desktop/tauriBridge';
-import { useRefreshYtAuth, useSelectChannel, useSetConnected, useYtAuth } from '@/extension/useYtAuth';
+import { useRefreshYtAuth, useSelectChannel, useSetConnected, useYtAuth, ytAuthQueryKey } from '@/extension/useYtAuth';
+import { useUi } from '@/state/ui';
 
 const SIGN_IN_URL = 'https://accounts.google.com/ServiceLogin?service=youtube&continue=https://music.youtube.com/';
 
@@ -34,12 +36,21 @@ export function AccountButton({ compact = false }: { compact?: boolean }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const close = useCallback(() => setAnchor(null), []);
   const desktop = isTauriDesktop();
+  const qc = useQueryClient();
+  const openQuickSignIn = useUi((s) => s.setQuickSignInOpen);
+  const sessionMeta = useQuery({
+    queryKey: ['desktop', 'session-meta'],
+    queryFn: () => desktopApi.authGetSessionMeta(),
+    enabled: desktop,
+    staleTime: 10_000,
+  });
+  const isTemporary = desktop && sessionMeta.data?.persistence === 'temporary';
 
   if (status.state !== 'ready') return null;
   const { auth } = status;
 
   const openSignIn = () => {
-    if (desktop) void desktopApi.openYtSignIn();
+    if (desktop) openQuickSignIn(true);
     else window.open(SIGN_IN_URL, '_blank', 'noreferrer');
   };
 
@@ -105,6 +116,17 @@ export function AccountButton({ compact = false }: { compact?: boolean }) {
       >
         <Avatar src={active.avatarUrl} name={active.name} size={24} />
         <span className={compact ? 'min-w-0 flex-1 truncate sm:sr-only' : 'min-w-0 flex-1 truncate'}>{active.name}</span>
+        {isTemporary && (
+          <span
+            className={
+              compact
+                ? 'hidden rounded-pill border border-(--labelDivider) bg-quinary px-1.5 py-0.5 text-[10px] font-semibold text-secondary sm:inline-flex'
+                : 'rounded-pill border border-(--labelDivider) bg-quinary px-1.5 py-0.5 text-[10px] font-semibold text-secondary'
+            }
+          >
+            Temporary
+          </span>
+        )}
         {multiple && (
           <ChevronsUpDown
             size={14}
@@ -136,6 +158,19 @@ export function AccountButton({ compact = false }: { compact?: boolean }) {
             </div>
           ))}
           <MenuSeparator />
+          {isTemporary && (
+            <MenuItem
+              onSelect={() => {
+                close();
+                void desktopApi.authPromoteTemporarySession().then(() => {
+                  void qc.invalidateQueries({ queryKey: ['desktop', 'session-meta'] });
+                  void qc.invalidateQueries({ queryKey: ytAuthQueryKey });
+                });
+              }}
+            >
+              Keep me signed in (Save to PC)
+            </MenuItem>
+          )}
           <MenuItem
             onSelect={() => {
               close();
@@ -149,8 +184,13 @@ export function AccountButton({ compact = false }: { compact?: boolean }) {
             destructive
             onSelect={() => {
               close();
-              if (desktop) void desktopApi.signOutYt();
-              else connect.mutate(false);
+              if (desktop) {
+                void desktopApi.signOutYt().then(() => {
+                  void qc.invalidateQueries({ queryKey: ['desktop', 'session-meta'] });
+                });
+              } else {
+                connect.mutate(false);
+              }
             }}
           >
             Sign Out

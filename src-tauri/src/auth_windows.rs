@@ -35,7 +35,7 @@ const DISCORD_TOKEN_CAPTURE_JS: &str = r#"
 })();
 "#;
 
-pub fn open_youtube_login(app: &AppHandle) -> Result<()> {
+pub fn open_youtube_login(app: &AppHandle, keep_signed_in: bool) -> Result<()> {
     if let Some(existing) = app.get_webview_window("auth-youtube") {
         let _ = existing.show();
         let _ = existing.set_focus();
@@ -90,12 +90,17 @@ pub fn open_youtube_login(app: &AppHandle) -> Result<()> {
                             .collect::<Vec<_>>()
                             .join("; ");
                         let state = handle.state::<AppState>();
-                        if state.yt_auth.save_cookies(Some(header)).is_ok() {
+                        if state
+                            .yt_auth
+                            .save_session(Some(header), None, keep_signed_in, "google")
+                            .is_ok()
+                        {
                             let auth = state.yt_auth.auth_state(true).await;
                             let _ = handle.emit(
                                 "bridge://event",
                                 json!({ "event": "yt.authState", "data": auth }),
                             );
+                            let _ = handle.emit("auth://session-meta-changed", json!({}));
                         }
                         let _ = win.close();
                         return;

@@ -89,6 +89,42 @@ export interface WatermarkStatus {
   integrityValid: boolean;
 }
 
+export type DesktopSessionPersistence = 'signed_out' | 'temporary' | 'persistent';
+
+export interface DesktopSessionMeta {
+  persistence: DesktopSessionPersistence;
+  source: string | null;
+  skipSignInPrompt: boolean;
+}
+
+export interface GeneratedOneKey {
+  key: string;
+  hasPin: boolean;
+  expiresAtMs: number | null;
+  includeSpotify: boolean;
+}
+
+export interface UnlockWithOneKeyResult {
+  auth: ResultOf<'yt.authState'>;
+  persistence: DesktopSessionPersistence;
+}
+
+export interface QuickLoginStatus {
+  active: boolean;
+  code: string | null;
+  pairId: string | null;
+  qrUrl: string | null;
+  lanIp: string | null;
+  port: number | null;
+  expiresAtMs: number | null;
+  keepSignedIn: boolean;
+}
+
+export interface QuickLoginCompletedEvent {
+  accountName: string;
+  keepSignedIn: boolean;
+}
+
 export interface SmtcMetadataPayload {
   title: string;
   artist?: string | null;
@@ -541,8 +577,45 @@ export function createTauriBridge(): Bridge {
 }
 
 export const desktopApi = {
-  openYtSignIn: () => invoke<void>('open_yt_sign_in'),
+  openYtSignIn: (keepSignedIn?: boolean) =>
+    invoke<void>('open_yt_sign_in', keepSignedIn === undefined ? {} : { keepSignedIn }),
   signOutYt: () => invoke<void>('sign_out_yt'),
+  authGetSessionMeta: () => invoke<DesktopSessionMeta>('auth_get_session_meta'),
+  authSetSkipSignInPrompt: (skip: boolean) =>
+    invoke<DesktopSessionMeta>('auth_set_skip_sign_in_prompt', { skip }),
+  authPromoteTemporarySession: () =>
+    invoke<DesktopSessionMeta>('auth_promote_temporary_session'),
+  authGenerateOneKey: (
+    includeSpotify: boolean,
+    ttlMinutes?: number | null,
+    pin?: string | null,
+  ) =>
+    invoke<GeneratedOneKey>('auth_generate_one_key', {
+      includeSpotify,
+      ttlMinutes: ttlMinutes ?? null,
+      pin: pin ?? null,
+    }),
+  authUnlockWithOneKey: (key: string, pin: string | null, keepSignedIn: boolean) =>
+    invoke<UnlockWithOneKeyResult>('auth_unlock_with_one_key', {
+      key,
+      pin,
+      keepSignedIn,
+    }),
+  authQuickLoginStart: (keepSignedIn: boolean) =>
+    invoke<QuickLoginStatus>('auth_quick_login_start', { keepSignedIn }),
+  authQuickLoginSetKeep: (keepSignedIn: boolean) =>
+    invoke<QuickLoginStatus>('auth_quick_login_set_keep', { keepSignedIn }),
+  authQuickLoginStop: () => invoke<QuickLoginStatus>('auth_quick_login_stop'),
+  authQuickLoginApprovePeer: (peerUrl: string, code: string, includeSpotify: boolean) =>
+    invoke<string>('auth_quick_login_approve_peer', {
+      peerUrl,
+      code,
+      includeSpotify,
+    }),
+  onQuickLoginCompleted: (listener: (ev: QuickLoginCompletedEvent) => void) =>
+    listen<QuickLoginCompletedEvent>('auth://quick-login-completed', (ev) => listener(ev.payload)),
+  onSessionMetaChanged: (listener: () => void) =>
+    listen<Record<string, unknown>>('auth://session-meta-changed', () => listener()),
   setMinimizeToTray: (enabled: boolean) => invoke<boolean>('set_minimize_to_tray', { enabled }),
   checkForUpdates: () => invoke<UpdateCheckResult>('check_for_updates'),
   watermarkStatus: () => invoke<WatermarkStatus>('get_watermark_status'),

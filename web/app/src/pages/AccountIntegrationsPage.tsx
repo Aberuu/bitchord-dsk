@@ -5,10 +5,12 @@ import { SiApplemusic, SiDiscord, SiSpotify, SiYoutubemusic } from 'react-icons/
 import { PrefetchLink } from '@/components/PrefetchLink';
 import { SubpageHeader } from '@/components/SubpageHeader';
 import { desktopApi, isTauriDesktop } from '@/desktop/tauriBridge';
+import { OneKeySessionSection } from '@/desktop/OneKeySessionSection';
 import { useDiscord } from '@/extension/useDiscord';
 import { useExtension } from '@/extension/useExtension';
 import { useYtAuth } from '@/extension/useYtAuth';
 import { queryClient } from '@/lib/queryClient';
+import { useUi } from '@/state/ui';
 import { useHistorySettings } from '@/playback/historyReporting';
 import {
   AppleMusicIntegration,
@@ -204,7 +206,9 @@ function ScrobblingSection() {
 }
 
 export default function AccountIntegrationsPage() {
+  const preview1Key = typeof window !== 'undefined' && window.location.hash === '#preview-1key';
   const desktop = isTauriDesktop();
+  const effectiveDesktop = desktop || preview1Key;
   const extension = useExtension();
   const yt = useYtAuth();
   const discord = useDiscord();
@@ -238,8 +242,10 @@ export default function AccountIntegrationsPage() {
                   className={settingsUi.inlineButton}
                   onClick={() =>
                     yt.state === 'ready' && yt.auth.signedIn
-                      ? void desktopApi.signOutYt()
-                      : void desktopApi.openYtSignIn()
+                      ? void desktopApi.signOutYt().then(() => {
+                          void queryClient.invalidateQueries({ queryKey: ['desktop', 'session-meta'] });
+                        })
+                      : useUi.getState().setQuickSignInOpen(true)
                   }
                 >
                   {yt.state === 'ready' && yt.auth.signedIn ? 'Sign Out' : 'Sign In'}
@@ -268,6 +274,12 @@ export default function AccountIntegrationsPage() {
           />
           <CanvasToggle />
         </section>
+
+        <OneKeySessionSection
+          desktop={effectiveDesktop}
+          ytSignedIn={(yt.state === 'ready' && yt.auth.signedIn) || preview1Key}
+          preview={preview1Key}
+        />
 
         {desktop && <ScrobblingSection />}
 

@@ -3,10 +3,11 @@ mod commands;
 mod tray;
 pub mod updater;
 
-use core_auth::{DesktopPrefs, SecretVault, SpotifyService, YouTubeAuthService};
+use core_auth::{decode_one_key, DesktopPrefs, SecretVault, SpotifyService, YouTubeAuthService};
 use core_downloads::LibraryStore;
 use core_integrations::{
-    CastService, DiscordService, MobileSyncService, ScrobbleService, SmtcController,
+    CastService, DiscordService, MobileSyncService, QuickLoginService, ScrobbleService,
+    SmtcController,
 };
 use core_lyrics::LyricsProxy;
 use core_playback::{AudioHotplugWatcher, AudioTapServer, NativeAudioEngine};
@@ -34,6 +35,7 @@ pub struct AppState {
     pub playback: Arc<NativeAudioEngine>,
     pub cast: Arc<CastService>,
     pub mobile_sync: Arc<MobileSyncService>,
+    pub quick_login: Arc<QuickLoginService>,
     pub audio_tap_url: String,
     pub _audio_hotplug: AudioHotplugWatcher,
     pub smtc: Mutex<Option<SmtcController>>,
@@ -52,8 +54,10 @@ pub async fn shutdown_and_exit(app: &AppHandle) {
         )
         .await;
         let _ = state.stats.flush();
+        state.quick_login.stop();
         state.mobile_sync.stop();
         state.discord.shutdown();
+        state.vault.clear_ephemeral_auth();
         state.playback.stop();
     }
     app.exit(0);
@@ -170,6 +174,77 @@ pub fn run() {
                 }),
             ));
 
+            let app_handle_ql = app.handle().clone();
+            let vault_ql = Arc::clone(&vault);
+            let yt_ql = Arc::clone(&yt_auth);
+            let sp_ql = Arc::clone(&spotify);
+            let quick_login = Arc::new(QuickLoginService::new(Arc::new(move |payload, keep_signed_in| {
+                let app_h = app_handle_ql.clone();
+                let vault_c = Arc::clone(&vault_ql);
+                let yt_c = Arc::clone(&yt_ql);
+                let sp_c = Arc::clone(&sp_ql);
+                Box::pin(async move {
+                    let prev_data = vault_c.snapshot();
+                    let prev_eph = vault_c.ephemeral_snapshot();
+
+                    let (yt_cookie, channel_id, spotify_dc, source) = if let Some(ref key) = payload.one_key {
+                        let decoded = decode_one_key(key, payload.pin.as_deref())?;
+                        (
+                            decoded.yt_cookie_header,
+                            decoded.yt_selected_channel_id,
+                            decoded.spotify_sp_dc.or(payload.spotify_sp_dc),
+                            "qr_one_key",
+                        )
+                    } else if let Some(raw_cookie) = payload.yt_cookie_header {
+                        (raw_cookie, None, payload.spotify_sp_dc, "qr_cookie")
+                    } else {
+                        return Err(anyhow::anyhow!("Missing 1-Key Session or YouTube cookie header"));
+                    };
+
+                    yt_c.save_session(Some(yt_cookie), channel_id, keep_signed_in, source)?;
+                    if let Some(ref sp) = spotify_dc {
+                        let _ = sp_c.save_session(Some(sp.clone()), keep_signed_in);
+                    }
+
+                    let auth = yt_c.auth_state(true).await;
+                    if !auth.signed_in {
+                        vault_c.restore_ephemeral(prev_eph);
+                        if keep_signed_in {
+                            let _ = vault_c.update(|d| {
+                                d.yt_cookie_header = prev_data.yt_cookie_header;
+                                d.yt_connected = prev_data.yt_connected;
+                                d.yt_selected_channel_id = prev_data.yt_selected_channel_id;
+                            });
+                        }
+                        yt_c.invalidate_cache();
+                        let reason = auth
+                            .problem
+                            .unwrap_or_else(|| "YouTube rejected the provided session.".to_string());
+                        return Err(anyhow::anyhow!("{reason}"));
+                    }
+
+                    let account_name = auth
+                        .active
+                        .as_ref()
+                        .map(|c| c.channel.name.clone())
+                        .unwrap_or_else(|| "YouTube Music".to_string());
+                    let _ = app_h.emit("bridge://event", json!({ "event": "yt.authState", "data": auth }));
+                    if spotify_dc.is_some() {
+                        let sp_auth = sp_c.auth_state(true).await;
+                        let _ = app_h.emit(
+                            "bridge://event",
+                            json!({ "event": "spotify.authState", "data": sp_auth }),
+                        );
+                    }
+                    let _ = app_h.emit("auth://session-meta-changed", json!({}));
+                    let _ = app_h.emit(
+                        "auth://quick-login-completed",
+                        json!({ "accountName": account_name, "keepSignedIn": keep_signed_in }),
+                    );
+                    Ok(account_name)
+                })
+            })));
+
             let (desktop_prefs, prefs_path) = DesktopPrefs::load_default();
             let initial_tray = desktop_prefs.minimize_to_tray;
 
@@ -218,6 +293,7 @@ pub fn run() {
                 playback,
                 cast,
                 mobile_sync,
+                quick_login,
                 audio_tap_url,
                 _audio_hotplug: audio_hotplug,
                 smtc: Mutex::new(smtc_ctrl),
@@ -257,6 +333,15 @@ pub fn run() {
             commands::bridge_call,
             commands::open_yt_sign_in,
             commands::sign_out_yt,
+            commands::auth_get_session_meta,
+            commands::auth_set_skip_sign_in_prompt,
+            commands::auth_promote_temporary_session,
+            commands::auth_generate_one_key,
+            commands::auth_unlock_with_one_key,
+            commands::auth_quick_login_start,
+            commands::auth_quick_login_set_keep,
+            commands::auth_quick_login_stop,
+            commands::auth_quick_login_approve_peer,
             commands::smtc_update_metadata,
             commands::smtc_update_playback,
             commands::scrobble_get_state,

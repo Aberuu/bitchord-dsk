@@ -20,6 +20,10 @@ interface UiState {
   setCastModalOpen: (open: boolean) => void;
   shortcutsOpen: boolean;
   setShortcutsOpen: (open: boolean) => void;
+  quickSignInOpen: boolean;
+  setQuickSignInOpen: (open: boolean) => void;
+  quickSignInRemindedThisRun: boolean;
+  remindQuickSignInLater: () => void;
   updateModalOpen: boolean;
   setUpdateModalOpen: (open: boolean) => void;
   hasPendingUpdate: boolean;
@@ -76,6 +80,10 @@ export const useUi = create<UiState>()((set) => ({
   setCastModalOpen: (castModalOpen) => set({ castModalOpen }),
   shortcutsOpen: false,
   setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
+  quickSignInOpen: false,
+  setQuickSignInOpen: (quickSignInOpen) => set({ quickSignInOpen }),
+  quickSignInRemindedThisRun: false,
+  remindQuickSignInLater: () => set({ quickSignInOpen: false, quickSignInRemindedThisRun: true }),
   updateModalOpen: false,
   setUpdateModalOpen: (updateModalOpen) => set({ updateModalOpen }),
   hasPendingUpdate: false,
