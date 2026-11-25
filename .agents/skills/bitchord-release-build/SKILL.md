@@ -27,11 +27,17 @@ Follow these steps to build production Windows installers cleanly:
    Remove-Item $cfg -ErrorAction SilentlyContinue
    ```
 
-4. **Verify output installers:**
+4. **Verify Zero External MinGW Runtime DLLs (prevents `0xc000007b` on other PCs):**
+   ```powershell
+   $bad = C:\mingw64\bin\objdump.exe -p "target\release\bitchord-desktop.exe" | Select-String "DLL Name:" | Where-Object { $_.Line -match "libstdc\+\+|libgcc|libwinpthread" }
+   if ($bad) { throw "Forbidden dynamic MinGW DLL imports found: $($bad -join ', ')" }
+   ```
+
+5. **Verify output installers:**
    - `target\release\bundle\nsis\BitChord_<version>_x64-setup.exe`
    - `target\release\bundle\msi\BitChord_<version>_x64_en-US.msi`
 
-5. **Publish GitHub Release:**
+6. **Publish GitHub Release:**
    Write release notes to a UTF-8 Markdown file (never pass double-quoted inline `--notes` in PowerShell, which mangles backticks and backslashes), then create the release:
    ```powershell
    gh release create v<version> "target\release\bundle\nsis\BitChord_<version>_x64-setup.exe" "target\release\bundle\msi\BitChord_<version>_x64_en-US.msi" --title "BitChord Desktop v<version>" --notes-file release-notes.md

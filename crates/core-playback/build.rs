@@ -34,11 +34,42 @@ fn main() {
         .file(native_root.join("loopmix").join("loop_mix_renderer.cpp"))
         .warnings(false);
 
-    if cfg!(target_env = "msvc") {
+    let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    if target_env == "msvc" {
         build.flag("/O2");
     } else {
         build.flag("-O2");
+        if target_env == "gnu" {
+            build.cpp_link_stdlib_static(true);
+        }
     }
 
+    let gnu_compiler = if target_env == "gnu" {
+        Some(build.get_compiler())
+    } else {
+        None
+    };
+
     build.compile("bitchord_automix_native");
+
+    if let Some(comp) = gnu_compiler {
+        for lib_file in ["libstdc++.a", "libwinpthread.a"] {
+            if let Ok(out) = comp
+                .to_command()
+                .arg(format!("-print-file-name={lib_file}"))
+                .output()
+            {
+                if out.status.success() {
+                    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    let resolved = PathBuf::from(&raw);
+                    if resolved.is_file() {
+                        if let Some(parent) = resolved.parent() {
+                            println!("cargo:rustc-link-search=native={}", parent.display());
+                        }
+                    }
+                }
+            }
+        }
+        println!("cargo:rustc-link-lib=static=winpthread");
+    }
 }
