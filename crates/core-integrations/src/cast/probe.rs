@@ -166,6 +166,18 @@ fn verify_udp_multicast_socket(local_ip: Ipv4Addr) -> bool {
 pub fn probe_cast_support() -> CastSupportStatus {
     let adapters = list_active_lan_adapters();
     let Some(primary) = adapters.first() else {
+        #[cfg(windows)]
+        return CastSupportStatus {
+            supported: true,
+            reason: Some(
+                "Wi-Fi multicast is unavailable; Windows Cast (Win + K) remains available for Miracast displays."
+                    .to_string(),
+            ),
+            local_ip: None,
+            adapter_name: None,
+            protocols: vec!["miracast".to_string()],
+        };
+        #[cfg(not(windows))]
         return CastSupportStatus {
             supported: false,
             reason: Some("No active Wi-Fi or Ethernet LAN interface is available.".to_string()),
@@ -176,6 +188,18 @@ pub fn probe_cast_support() -> CastSupportStatus {
     };
 
     if !verify_udp_multicast_socket(primary.ip) {
+        #[cfg(windows)]
+        return CastSupportStatus {
+            supported: true,
+            reason: Some(
+                "UDP multicast is blocked on this adapter; Windows Cast (Win + K) remains available for Miracast displays."
+                    .to_string(),
+            ),
+            local_ip: Some(primary.ip.to_string()),
+            adapter_name: Some(primary.name.clone()),
+            protocols: vec!["miracast".to_string()],
+        };
+        #[cfg(not(windows))]
         return CastSupportStatus {
             supported: false,
             reason: Some("UDP multicast is blocked or unavailable on the active network adapter.".to_string()),
@@ -190,7 +214,69 @@ pub fn probe_cast_support() -> CastSupportStatus {
         reason: None,
         local_ip: Some(primary.ip.to_string()),
         adapter_name: Some(primary.name.clone()),
-        protocols: vec!["chromecast".to_string(), "dlna".to_string()],
+        protocols: vec![
+            "chromecast".to_string(),
+            "dlna".to_string(),
+            #[cfg(windows)]
+            "miracast".to_string(),
+        ],
+    }
+}
+
+pub fn open_windows_cast_settings() -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer.exe")
+            .arg("ms-settings-connectabledevices:devicediscovery")
+            .spawn()?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        Err(anyhow::anyhow!(
+            "Windows Cast settings are only supported on Windows"
+        ))
+    }
+}
+
+pub fn open_windows_cast_flyout() -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+            KEYEVENTF_KEYUP, VK_K, VK_LWIN,
+        };
+
+        let key = |vk, flags| INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: 0,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        let inputs = [
+            key(VK_LWIN, KEYBD_EVENT_FLAGS(0)),
+            key(VK_K, KEYBD_EVENT_FLAGS(0)),
+            key(VK_K, KEYEVENTF_KEYUP),
+            key(VK_LWIN, KEYEVENTF_KEYUP),
+        ];
+        let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+        if sent == inputs.len() as u32 {
+            Ok(())
+        } else {
+            open_windows_cast_settings()
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        Err(anyhow::anyhow!(
+            "Windows Cast flyout is only supported on Windows"
+        ))
     }
 }
 
@@ -225,5 +311,13 @@ mod tests {
         assert!(score_adapter("Wi-Fi", 71) > score_adapter("Ethernet", 6));
         assert!(score_adapter("vEthernet (WSL)", 6) < 0);
         assert!(score_adapter("Tailscale", 6) < 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_cast_support_always_includes_miracast() {
+        let status = probe_cast_support();
+        assert!(status.supported);
+        assert!(status.protocols.iter().any(|p| p == "miracast"));
     }
 }

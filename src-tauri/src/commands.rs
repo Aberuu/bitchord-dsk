@@ -1212,6 +1212,16 @@ pub async fn cast_disconnect(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn cast_open_windows_cast() -> Result<(), String> {
+    core_integrations::cast::open_windows_cast_flyout().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cast_open_windows_cast_settings() -> Result<(), String> {
+    core_integrations::cast::open_windows_cast_settings().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn open_devtools_window(app: AppHandle) {
     #[cfg(debug_assertions)]
     {

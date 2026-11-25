@@ -76,7 +76,7 @@ export const useCast = create<CastStoreState>()((set) => ({
     }
     set({ scanning: true, error: null });
     try {
-      const devices = await desktopApi.castDiscover(1800);
+      const devices = await desktopApi.castDiscover(3000);
       set({ devices, scanning: false });
     } catch (err) {
       set({

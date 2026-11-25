@@ -5,6 +5,7 @@ pub mod probe;
 pub mod relay;
 pub mod types;
 
+pub use probe::{open_windows_cast_flyout, open_windows_cast_settings};
 pub use types::{
     CastDevice, CastLoadRequest, CastProtocol, CastSessionState, CastSupportStatus,
 };
@@ -72,7 +73,7 @@ impl CastService {
     }
 
     pub async fn discover(&self, timeout_ms: Option<u64>) -> Vec<CastDevice> {
-        discover_all_devices(&self.http, timeout_ms.unwrap_or(1800)).await
+        discover_all_devices(&self.http, timeout_ms.unwrap_or(3000)).await
     }
 
     pub async fn load_media(&self, req: CastLoadRequest) -> Result<CastSessionState> {

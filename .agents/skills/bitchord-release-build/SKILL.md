@@ -32,6 +32,8 @@ Follow these steps to build production Windows installers cleanly:
    - `target\release\bundle\msi\BitChord_<version>_x64_en-US.msi`
 
 5. **Publish GitHub Release:**
+   Write release notes to a UTF-8 Markdown file (never pass double-quoted inline `--notes` in PowerShell, which mangles backticks and backslashes), then create the release:
    ```powershell
-   gh release create v<version> "target\release\bundle\nsis\BitChord_<version>_x64-setup.exe" "target\release\bundle\msi\BitChord_<version>_x64_en-US.msi" --title "BitChord Desktop v<version>" --notes "..."
+   gh release create v<version> "target\release\bundle\nsis\BitChord_<version>_x64-setup.exe" "target\release\bundle\msi\BitChord_<version>_x64_en-US.msi" --title "BitChord Desktop v<version>" --notes-file release-notes.md
+   Remove-Item release-notes.md -ErrorAction SilentlyContinue
    ```

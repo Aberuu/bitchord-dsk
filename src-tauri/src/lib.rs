@@ -385,6 +385,8 @@ pub fn run() {
             commands::cast_seek,
             commands::cast_set_volume,
             commands::cast_disconnect,
+            commands::cast_open_windows_cast,
+            commands::cast_open_windows_cast_settings,
             commands::stats_record_sample,
             commands::stats_flush,
             commands::stats_get_summary,

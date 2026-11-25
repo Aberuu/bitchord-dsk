@@ -207,4 +207,66 @@ describe('System Tray default OFF preference and Cast to TV modal', () => {
     expect(disconnectSpy).toHaveBeenCalledTimes(1);
     expect(useCast.getState().session.connected).toBe(false);
   });
+
+  it('launches Windows Cast (Win + K) and Cast Settings buttons directly from CastModal and opens from PlayerBar', async () => {
+    const winCastSpy = vi.spyOn(desktopApi, 'castOpenWindowsCast').mockResolvedValue(undefined);
+    const winSettingsSpy = vi.spyOn(desktopApi, 'castOpenWindowsCastSettings').mockResolvedValue(undefined);
+    vi.spyOn(desktopApi, 'castDiscover').mockResolvedValue([]);
+
+    useCast.setState({
+      support: {
+        supported: true,
+        reason: null,
+        localIp: null,
+        adapterName: null,
+        protocols: ['miracast'],
+      },
+      session: DEFAULT_CAST_SESSION,
+      devices: [],
+      scanning: false,
+      error: null,
+    });
+
+    const { PlayerBar } = await import('@/shell/PlayerBar');
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={qc}>
+          <MemoryRouter initialEntries={['/home']}>
+            <PlayerBar />
+            <CastModal />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      await Promise.resolve();
+    });
+
+    const barCastBtn = host.querySelector('button[aria-label="Cast to TV"]') as HTMLButtonElement;
+    expect(barCastBtn).toBeTruthy();
+
+    await act(async () => {
+      barCastBtn.click();
+      await Promise.resolve();
+    });
+
+    expect(useUi.getState().castModalOpen).toBe(true);
+
+    const winCastBtn = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
+      b.textContent?.includes('Open Windows Cast (Win + K)'),
+    )!;
+    const settingsBtn = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
+      b.textContent?.includes('Cast Settings'),
+    )!;
+    expect(winCastBtn).toBeTruthy();
+    expect(settingsBtn).toBeTruthy();
+
+    await act(async () => {
+      winCastBtn.click();
+      settingsBtn.click();
+      await Promise.resolve();
+    });
+
+    expect(winCastSpy).toHaveBeenCalledTimes(1);
+    expect(winSettingsSpy).toHaveBeenCalledTimes(1);
+  });
 });

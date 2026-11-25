@@ -1,4 +1,4 @@
-import { AudioLines } from 'lucide-react';
+import { AudioLines, Cast } from 'lucide-react';
 import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import {
@@ -15,6 +15,7 @@ import {
 } from '@/components/icons/Transport';
 import { FavoriteButton } from '@/components/music/FavoriteButton';
 import { TrackMenu } from '@/components/music/TrackMenu';
+import { useCastSession, useCastSupport } from '@/desktop/useCastSupport';
 import { usePlayer } from '@/state/player';
 import { useUi } from '@/state/ui';
 import { Lcd } from './Lcd';
@@ -34,6 +35,9 @@ export function PlayerBar() {
   const toggleSidePanel = useUi((s) => s.toggleSidePanel);
   const closeSidePanel = useUi((s) => s.closeSidePanel);
   const setAudioOutputOpen = useUi((s) => s.setAudioOutputOpen);
+  const setCastModalOpen = useUi((s) => s.setCastModalOpen);
+  const castSupport = useCastSupport();
+  const castSession = useCastSession();
   const hasTrack = usePlayer((s) => s.nowPlaying !== null);
   const videoId = usePlayer((s) => s.nowPlaying?.videoId ?? null);
   const track = usePlayer((s) => {
@@ -127,6 +131,25 @@ export function PlayerBar() {
           >
             <AudioLines size={17} strokeWidth={2} aria-hidden="true" />
           </button>
+          {castSupport.supported && (
+            <button
+              className={fading}
+              aria-label={
+                castSession.connected && castSession.device
+                  ? `Cast to TV (${castSession.device.name})`
+                  : 'Cast to TV'
+              }
+              aria-pressed={castSession.connected}
+              title={
+                castSession.connected && castSession.device
+                  ? `Casting to ${castSession.device.name}`
+                  : 'Cast to TV'
+              }
+              onClick={() => setCastModalOpen(true)}
+            >
+              <Cast size={17} strokeWidth={2} aria-hidden="true" />
+            </button>
+          )}
           <button
             className={fading}
             aria-label="Up Next"

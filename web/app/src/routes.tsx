@@ -1,18 +1,17 @@
+import { useEffect } from 'react';
 import { Navigate, type RouteObject } from 'react-router';
 import { notFound, pageElement, pages } from '@/pageRegistry';
 import { AppShell, LAST_ROUTE_KEY } from '@/shell/AppShell';
 
 function IndexRedirect() {
-  let target = '/home';
-  try {
-    const saved = localStorage.getItem(LAST_ROUTE_KEY);
-    if (saved && saved.startsWith('/') && !saved.startsWith('/invite') && saved !== '/') {
-      target = saved;
+  useEffect(() => {
+    try {
+      localStorage.removeItem(LAST_ROUTE_KEY);
+    } catch {
+      // Ignore storage errors.
     }
-  } catch {
-    // Ignore storage errors.
-  }
-  return <Navigate to={target} replace />;
+  }, []);
+  return <Navigate to="/home" replace />;
 }
 
 export const routes: RouteObject[] = [

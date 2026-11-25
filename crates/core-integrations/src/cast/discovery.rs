@@ -20,7 +20,7 @@ pub async fn discover_all_devices(http: &reqwest::Client, timeout_ms: u64) -> Ve
     if adapters.is_empty() {
         return Vec::new();
     }
-    let window = Duration::from_millis(timeout_ms.clamp(600, 5000));
+    let window = Duration::from_millis(timeout_ms.clamp(1200, 6000));
     let (mdns_devices, dlna_devices) = tokio::join!(
         discover_chromecast(&adapters, window),
         discover_dlna(http, &adapters, window)
@@ -46,7 +46,25 @@ fn bind_multicast_udp(local_ip: Ipv4Addr) -> Result<UdpSocket> {
     Ok(UdpSocket::from_std(std_sock)?)
 }
 
-fn build_mdns_ptr_query(service_name: &str) -> Vec<u8> {
+fn bind_mdns_multicast_listener(adapters: &[crate::cast::probe::LanAdapter]) -> Result<UdpSocket> {
+    let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+    sock.set_reuse_address(true)?;
+    sock.set_nonblocking(true)?;
+    sock.bind(&SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MDNS_PORT).into())?;
+    let mut joined = false;
+    for adapter in adapters.iter().take(4) {
+        if sock.join_multicast_v4(&MDNS_ADDR, &adapter.ip).is_ok() {
+            joined = true;
+        }
+    }
+    if !joined {
+        sock.join_multicast_v4(&MDNS_ADDR, &Ipv4Addr::UNSPECIFIED)?;
+    }
+    let std_sock: std::net::UdpSocket = sock.into();
+    Ok(UdpSocket::from_std(std_sock)?)
+}
+
+fn build_mdns_ptr_query_with_mode(service_name: &str, unicast_response: bool) -> Vec<u8> {
     let mut pkt = Vec::with_capacity(64);
     // Transaction ID=0, Flags=0 (standard query), QDCOUNT=1
     pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
@@ -56,8 +74,10 @@ fn build_mdns_ptr_query(service_name: &str) -> Vec<u8> {
         pkt.extend_from_slice(bytes);
     }
     pkt.push(0x00);
-    // QTYPE = PTR (12), QCLASS = IN with QU unicast-response bit (0x8001)
-    pkt.extend_from_slice(&[0x00, 0x0C, 0x80, 0x01]);
+    // QTYPE = PTR (12), QCLASS = IN (0x0001 QM or 0x8001 QU)
+    let qclass: u16 = if unicast_response { 0x8001 } else { 0x0001 };
+    pkt.extend_from_slice(&[0x00, 0x0C]);
+    pkt.extend_from_slice(&qclass.to_be_bytes());
     pkt
 }
 
@@ -160,20 +180,22 @@ fn ingest_mdns_packet(pkt: &[u8], accum: &mut MdnsAccum) {
             return;
         }
         let rdata = &pkt[rdata_start..rdata_end];
-        let key = name.to_ascii_lowercase();
+        let key = name.trim_end_matches('.').to_ascii_lowercase();
 
         match rtype {
             12 => {
                 // PTR
                 if let Some((target, _)) = read_dns_name(pkt, rdata_start) {
-                    accum.ptrs.push(target);
+                    accum.ptrs.push(target.trim_end_matches('.').to_string());
                 }
             }
             33 if rdata.len() >= 6 => {
                 // SRV
                 let port = u16::from_be_bytes([rdata[4], rdata[5]]);
                 if let Some((target, _)) = read_dns_name(pkt, rdata_start + 6) {
-                    accum.srvs.insert(key, (port, target.to_ascii_lowercase()));
+                    accum
+                        .srvs
+                        .insert(key, (port, target.trim_end_matches('.').to_ascii_lowercase()));
                 }
             }
             16 => {
@@ -243,27 +265,49 @@ async fn discover_chromecast(
     adapters: &[crate::cast::probe::LanAdapter],
     window: Duration,
 ) -> Vec<CastDevice> {
-    let mut sockets = Vec::new();
+    let mut send_sockets = Vec::new();
     for adapter in adapters.iter().take(4) {
         if let Ok(sock) = bind_multicast_udp(adapter.ip) {
-            sockets.push(sock);
+            send_sockets.push(std::sync::Arc::new(sock));
         }
     }
-    if sockets.is_empty() {
+    if send_sockets.is_empty() {
         return Vec::new();
     }
 
-    let query = build_mdns_ptr_query("_googlecast._tcp.local.");
+    let query_qu = build_mdns_ptr_query_with_mode("_googlecast._tcp.local.", true);
+    let query_qm = build_mdns_ptr_query_with_mode("_googlecast._tcp.local.", false);
     let target = SocketAddr::V4(SocketAddrV4::new(MDNS_ADDR, MDNS_PORT));
-    for sock in &sockets {
-        let _ = sock.send_to(&query, target).await;
+
+    let mut listen_sockets = send_sockets.clone();
+    if let Ok(mcast_sock) = bind_mdns_multicast_listener(adapters) {
+        listen_sockets.push(std::sync::Arc::new(mcast_sock));
+    }
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+    let mut reader_tasks = Vec::with_capacity(listen_sockets.len());
+    for sock in listen_sockets {
+        let tx_c = tx.clone();
+        reader_tasks.push(tokio::spawn(async move {
+            let mut buf = [0u8; 4096];
+            while let Ok((len, _)) = sock.recv_from(&mut buf).await {
+                if tx_c.send(buf[..len].to_vec()).await.is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+    drop(tx);
+
+    for sock in &send_sockets {
+        let _ = sock.send_to(&query_qu, target).await;
+        let _ = sock.send_to(&query_qm, target).await;
     }
 
     let deadline = tokio::time::Instant::now() + window;
-    let resend_at = tokio::time::Instant::now() + Duration::from_millis(350);
+    let resend_at = tokio::time::Instant::now() + Duration::from_millis(450);
     let mut resent = false;
     let mut accum = MdnsAccum::default();
-    let mut buf = [0u8; 4096];
 
     loop {
         let now = tokio::time::Instant::now();
@@ -272,16 +316,23 @@ async fn discover_chromecast(
         }
         if !resent && now >= resend_at {
             resent = true;
-            for sock in &sockets {
-                let _ = sock.send_to(&query, target).await;
+            for sock in &send_sockets {
+                let _ = sock.send_to(&query_qu, target).await;
+                let _ = sock.send_to(&query_qm, target).await;
             }
         }
-        let step_wait = (deadline - now).min(Duration::from_millis(120));
-        for sock in &sockets {
-            if let Ok(Ok((len, _peer))) = tokio::time::timeout(step_wait, sock.recv_from(&mut buf)).await {
-                ingest_mdns_packet(&buf[..len], &mut accum);
-            }
+        let next_tick = if !resent {
+            resend_at.min(deadline) - now
+        } else {
+            deadline - now
+        };
+        if let Ok(Some(pkt)) = tokio::time::timeout(next_tick, rx.recv()).await {
+            ingest_mdns_packet(&pkt, &mut accum);
         }
+    }
+
+    for task in reader_tasks {
+        task.abort();
     }
 
     assemble_chromecast_devices(&accum)
@@ -423,7 +474,7 @@ async fn discover_dlna(
     let mut sockets = Vec::new();
     for adapter in adapters.iter().take(4) {
         if let Ok(sock) = bind_multicast_udp(adapter.ip) {
-            sockets.push(sock);
+            sockets.push(std::sync::Arc::new(sock));
         }
     }
     if sockets.is_empty() {
@@ -434,33 +485,73 @@ async fn discover_dlna(
     let search_targets = [
         "urn:schemas-upnp-org:device:MediaRenderer:1",
         "urn:schemas-upnp-org:service:AVTransport:1",
+        "upnp:rootdevice",
     ];
-    for st in search_targets {
-        let msg = format!(
-            "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: {st}\r\n\r\n"
-        );
+    let payloads: Vec<String> = search_targets
+        .iter()
+        .map(|st| {
+            format!(
+                "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: {st}\r\n\r\n"
+            )
+        })
+        .collect();
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(256);
+    let mut reader_tasks = Vec::with_capacity(sockets.len());
+    for sock in &sockets {
+        let sock_c = std::sync::Arc::clone(sock);
+        let tx_c = tx.clone();
+        reader_tasks.push(tokio::spawn(async move {
+            let mut buf = [0u8; 4096];
+            while let Ok((len, _)) = sock_c.recv_from(&mut buf).await {
+                let text = String::from_utf8_lossy(&buf[..len]).into_owned();
+                if let Some(loc) = extract_ssdp_location(&text) {
+                    if tx_c.send(loc).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }));
+    }
+    drop(tx);
+
+    for msg in &payloads {
         for sock in &sockets {
             let _ = sock.send_to(msg.as_bytes(), target).await;
         }
     }
 
     let mut locations = HashSet::new();
-    let deadline = tokio::time::Instant::now() + (window / 2).max(Duration::from_millis(750));
-    let mut buf = [0u8; 4096];
+    let collect_window = ((window * 3) / 4).max(Duration::from_millis(2200));
+    let deadline = tokio::time::Instant::now() + collect_window;
+    let resend_at = tokio::time::Instant::now() + Duration::from_millis(400);
+    let mut resent = false;
+
     loop {
         let now = tokio::time::Instant::now();
         if now >= deadline {
             break;
         }
-        let step_wait = (deadline - now).min(Duration::from_millis(120));
-        for sock in &sockets {
-            if let Ok(Ok((len, _peer))) = tokio::time::timeout(step_wait, sock.recv_from(&mut buf)).await {
-                let text = String::from_utf8_lossy(&buf[..len]);
-                if let Some(loc) = extract_ssdp_location(&text) {
-                    locations.insert(loc);
+        if !resent && now >= resend_at {
+            resent = true;
+            for msg in &payloads {
+                for sock in &sockets {
+                    let _ = sock.send_to(msg.as_bytes(), target).await;
                 }
             }
         }
+        let next_tick = if !resent {
+            resend_at.min(deadline) - now
+        } else {
+            deadline - now
+        };
+        if let Ok(Some(loc)) = tokio::time::timeout(next_tick, rx.recv()).await {
+            locations.insert(loc);
+        }
+    }
+
+    for task in reader_tasks {
+        task.abort();
     }
 
     let mut fetches = Vec::new();
@@ -469,7 +560,7 @@ async fn discover_dlna(
         fetches.push(async move {
             let resp = client
                 .get(&loc)
-                .timeout(Duration::from_millis(1400))
+                .timeout(Duration::from_millis(1800))
                 .send()
                 .await
                 .ok()?;
@@ -600,5 +691,13 @@ mod tests {
             dev.rendering_control_url.as_deref(),
             Some("http://192.168.1.45:9197/upnp/control/RenderingControl1")
         );
+    }
+
+    #[test]
+    fn builds_both_qu_and_qm_mdns_queries() {
+        let qu = build_mdns_ptr_query_with_mode("_googlecast._tcp.local.", true);
+        let qm = build_mdns_ptr_query_with_mode("_googlecast._tcp.local.", false);
+        assert_eq!(&qu[qu.len() - 4..], &[0x00, 0x0C, 0x80, 0x01]);
+        assert_eq!(&qm[qm.len() - 4..], &[0x00, 0x0C, 0x00, 0x01]);
     }
 }

@@ -684,6 +684,8 @@ export const desktopApi = {
   castSeek: (seconds: number) => invoke<void>('cast_seek', { seconds }),
   castSetVolume: (volume: number) => invoke<void>('cast_set_volume', { volume }),
   castDisconnect: () => invoke<void>('cast_disconnect'),
+  castOpenWindowsCast: () => invoke<void>('cast_open_windows_cast'),
+  castOpenWindowsCastSettings: () => invoke<void>('cast_open_windows_cast_settings'),
   onCastState: (listener: (state: CastSessionState) => void) =>
     listen<CastSessionState>('cast://state', (ev) => listener(ev.payload)),
   onCastTrackEnded: (listener: (trackId: string) => void) =>

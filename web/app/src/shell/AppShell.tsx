@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
-import { Outlet, useLocation } from 'react-router';
+import { Outlet } from 'react-router';
 import { PrefetchLink } from '@/components/PrefetchLink';
 import { config } from '@/config';
 import { isTauriDesktop } from '@/desktop/tauriBridge';
@@ -35,26 +35,10 @@ const FullScreenPlayer = lazy(() => import('./FullScreenPlayer').then((m) => ({ 
 
 export const LAST_ROUTE_KEY = 'bitchord:last-route';
 
-function isRestorableRoute(pathname: string): boolean {
-  if (!pathname || pathname === '/') return false;
-  if (pathname.startsWith('/invite')) return false;
-  if (pathname.startsWith('/extension')) return false;
-  return true;
-}
-
 export function AppShell() {
   useKeyboardShortcuts();
   useDiscordPresence();
   useDesktopIntegrations();
-  const location = useLocation();
-  useEffect(() => {
-    if (!isRestorableRoute(location.pathname)) return;
-    try {
-      localStorage.setItem(LAST_ROUTE_KEY, `${location.pathname}${location.search}`);
-    } catch {
-      // Ignore storage errors.
-    }
-  }, [location.pathname, location.search]);
   useEffect(() => {
     if (desktop) {
       void useSources.getState().loadFromBackend().catch(() => {});

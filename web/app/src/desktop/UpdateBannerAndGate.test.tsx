@@ -157,4 +157,23 @@ describe('UpdateBannerAndGate (Software Update frosted dialog)', () => {
     expect(dlSpy).toHaveBeenCalledTimes(2);
     expect(installSpy).toHaveBeenCalledTimes(1);
   });
+
+  it('displays version progression pill (current -> latest) with readable What\'s new card', () => {
+    act(() => {
+      root.render(
+        <UpdateBannerAndGate
+          forceDesktop
+          initialResult={makeUpdate({
+            currentVersion: '1.1.1',
+            latestVersion: '1.2.1',
+            notes: '### Fixes\n- **Updater**: single-pass install.',
+          })}
+        />,
+      );
+    });
+
+    expect(host.textContent).toContain('v1.1.1');
+    expect(host.textContent).toContain('v1.2.1');
+    expect(host.textContent).toContain('Updater');
+  });
 });
