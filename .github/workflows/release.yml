@@ -63,8 +63,13 @@ jobs:
 
       - name: Build Tauri bundles (NSIS / MSI) and standalone portable executable
         run: |
+          $ErrorActionPreference = "Stop"
           cargo install tauri-cli --version "^2" --locked
-          cargo tauri build
+          $cfg = Join-Path $env:RUNNER_TEMP "tauri-nobuild.json"
+          '{"build":{"beforeBuildCommand":""}}' | Set-Content -Path $cfg -Encoding UTF8
+          cargo tauri build --ci -c $cfg
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item $cfg -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path release-assets | Out-Null
           Copy-Item "target/release/bitchord-desktop.exe" "release-assets/BitChord-${{ steps.meta.outputs.version }}-win-x64.exe"
           Get-ChildItem -Path "target/release/bundle" -Recurse -Include *.exe,*.msi | ForEach-Object {
