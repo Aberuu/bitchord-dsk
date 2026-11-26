@@ -1,6 +1,7 @@
 import { AudioLines, Cast } from 'lucide-react';
 import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
+import { performBackNavigation } from '@/lib/navigationHistory';
 import {
   BackwardIcon,
   ForwardIcon,
@@ -55,11 +56,7 @@ export function PlayerBar() {
   const handleToggleLyrics = () => {
     closeSidePanel();
     if (onLyricsPage) {
-      if (window.history.length > 1) {
-        void navigate(-1);
-      } else {
-        void navigate('/home');
-      }
+      performBackNavigation(navigate, location, 'button');
     } else {
       void navigate('/lyrics');
     }

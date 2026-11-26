@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { AudioLines, Maximize2, Music2, Play, X } from 'lucide-react';
 import { useEffect } from 'react';
-import { useNavigate } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
+import { performBackNavigation } from '@/lib/navigationHistory';
 import {
   BackwardIcon,
   ForwardIcon,
@@ -48,6 +49,7 @@ function LyricsScrubber() {
 
 export default function LyricsPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const nowPlaying = usePlayer((s) => s.nowPlaying);
   const track = usePlayer((s) => {
     const entry = s.queue[s.index]?.track;
@@ -92,11 +94,7 @@ export default function LyricsPage() {
   };
 
   const handleClose = () => {
-    if (window.history.length > 1) {
-      void navigate(-1);
-    } else {
-      void navigate('/home');
-    }
+    performBackNavigation(navigate, location, 'button');
   };
 
   return (

@@ -16,6 +16,7 @@ import { useSources } from '@/state/sources';
 import { useUi } from '@/state/ui';
 import { AudioOutputModal } from './AudioOutputModal';
 import { AudioPipelineDialog } from './AudioPipelineDialog';
+import { BackButton } from './BackButton';
 import { Banner, bannerButtonClass } from './Banner';
 import { CastModal } from './CastModal';
 import { MobileBottomChrome } from './MobileBottomChrome';
@@ -125,8 +126,15 @@ export function AppShell() {
         </div>
         <Sidebar />
         {!desktop && (
-          <div className="pointer-events-none absolute top-0 left-0 z-[calc(var(--z-web-chrome)+1)] hidden h-11 w-(--web-navigation-compact-width) items-center justify-center sm:flex">
-            <SidebarToggleButton className="pointer-events-auto grid size-9 place-items-center rounded-nav text-secondary transition-colors hover:bg-quinary hover:text-primary" />
+          <div className="pointer-events-none absolute top-0 left-0 z-[calc(var(--z-web-chrome)+1)] hidden h-11 items-center sm:flex">
+            <div className="flex w-(--web-navigation-compact-width) items-center justify-center">
+              <SidebarToggleButton className="pointer-events-auto grid size-9 place-items-center rounded-nav text-secondary transition-colors hover:bg-quinary hover:text-primary" />
+            </div>
+            <BackButton
+              hideWhenDisabled
+              iconSize={18}
+              className="pointer-events-auto ml-1 grid size-9 place-items-center rounded-nav text-secondary transition-colors hover:bg-quinary hover:text-primary"
+            />
           </div>
         )}
         <TitleBar />

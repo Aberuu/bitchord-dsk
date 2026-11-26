@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SearchField } from '@/components/music/SearchField';
+import { resetNavigationHistory, useNavigationHistory } from '@/lib/navigationHistory';
 import { TitleBar } from './TitleBar';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -50,9 +51,10 @@ describe('TitleBar, SearchField borders, and OLED black dark theme tokens', () =
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
+    resetNavigationHistory();
   });
 
-  it('renders TitleBar as a transparent overlay with no divider border or surface split', () => {
+  it('renders TitleBar as a transparent overlay with Back button and no divider border or surface split', () => {
     act(() => {
       root.render(<TitleBar />);
     });
@@ -63,6 +65,24 @@ describe('TitleBar, SearchField borders, and OLED black dark theme tokens', () =
     expect(header.className).not.toContain('border-b');
     expect(header.querySelector('.glass-material')).toBeNull();
     expect(header.innerHTML).not.toContain('bg-(--scrollablePageBG)');
+
+    const backBtn = host.querySelector<HTMLButtonElement>('button[aria-label="Back"]')!;
+    expect(backBtn).toBeTruthy();
+    expect(backBtn.disabled).toBe(true);
+
+    act(() => {
+      useNavigationHistory.setState({
+        items: [
+          { key: '1', path: '/home', pathname: '/home' },
+          { key: '2', path: '/artist/UCfeast', pathname: '/artist/UCfeast' },
+        ],
+        cursor: 1,
+        lastNonSettingsPath: '/artist/UCfeast',
+        scrollPositions: {},
+      });
+    });
+    expect(backBtn.disabled).toBe(false);
+    expect(backBtn.title).toContain('Esc');
   });
 
   it('returns null for TitleBar outside Tauri desktop', () => {

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { usePlayer } from '@/state/player';
 import { useUi } from '@/state/ui';
@@ -12,15 +12,45 @@ import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 function Harness() {
   useKeyboardShortcuts();
   const location = useLocation();
+  const navigate = useNavigate();
   const fullScreenSearchOpen = useUi((s) => s.fullScreenSearchOpen);
   return (
     <div>
-      <span data-testid="path">{location.pathname}</span>
+      <span data-testid="path">{`${location.pathname}${location.search}`}</span>
+      <button type="button" data-testid="go-search" onClick={() => navigate('/search?q=feast')} />
+      <button type="button" data-testid="go-artist" onClick={() => navigate('/artist/UCfeast')} />
+      <button type="button" data-testid="go-album" onClick={() => navigate('/album/MPREbfeast')} />
+      <button type="button" data-testid="go-settings" onClick={() => navigate('/settings')} />
+      <button type="button" data-testid="go-appearance" onClick={() => navigate('/settings/appearance')} />
       {fullScreenSearchOpen && <input type="search" data-music-search="true" data-fullscreen-search="true" />}
       <Routes>
         <Route
           path="/home"
           element={<div key="home">Home</div>}
+        />
+        <Route
+          path="/artist/:id"
+          element={<div key="artist">Artist</div>}
+        />
+        <Route
+          path="/album/:id"
+          element={<div key="album">Album</div>}
+        />
+        <Route
+          path="/playlist/:id"
+          element={<div key="playlist">Playlist</div>}
+        />
+        <Route
+          path="/browse/:id"
+          element={<div key="browse">Browse</div>}
+        />
+        <Route
+          path="/library"
+          element={<div key="library">Library</div>}
+        />
+        <Route
+          path="/library/:section"
+          element={<div key="library-section">Library Section</div>}
         />
         <Route
           path="/settings"
@@ -29,6 +59,10 @@ function Harness() {
               <input type="search" placeholder="Search settings" />
             </div>
           }
+        />
+        <Route
+          path="/settings/appearance"
+          element={<div key="appearance">Appearance</div>}
         />
         <Route
           path="/settings/sources"
@@ -217,6 +251,85 @@ describe('useKeyboardShortcuts Ctrl+K', () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     });
     expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/settings');
+  });
+
+  it('navigates back step-by-step on Escape from Album -> Artist -> Search -> stays on Search, and supports Settings roundtrip without ping-pong', () => {
+    act(() => {
+      root.render(
+        <MemoryRouter initialEntries={['/home']}>
+          <Harness />
+        </MemoryRouter>,
+      );
+    });
+
+    const clickNav = (testId: string) => {
+      act(() => {
+        host.querySelector<HTMLButtonElement>(`[data-testid="${testId}"]`)!.click();
+      });
+    };
+    const pressEsc = () => {
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      });
+    };
+
+    clickNav('go-search');
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/search?q=feast');
+
+    clickNav('go-artist');
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/artist/UCfeast');
+
+    clickNav('go-album');
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/album/MPREbfeast');
+
+    // Visit Settings -> Appearance from Album, then unwind with Escape with zero ping-pong.
+    clickNav('go-settings');
+    clickNav('go-appearance');
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/settings/appearance');
+
+    pressEsc();
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/settings');
+
+    pressEsc();
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/album/MPREbfeast');
+
+    pressEsc();
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/artist/UCfeast');
+
+    pressEsc();
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/search?q=feast');
+
+    // Pressing Escape on a root tab does not leave Search unexpectedly.
+    pressEsc();
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/search?q=feast');
+  });
+
+  it('falls back cleanly on Escape for direct deep links into album, artist, or library section without prior history', () => {
+    act(() => {
+      root.render(
+        <MemoryRouter key="direct-album" initialEntries={['/album/direct123']}>
+          <Harness />
+        </MemoryRouter>,
+      );
+    });
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/home');
+
+    act(() => {
+      root.unmount();
+      root = createRoot(host);
+      root.render(
+        <MemoryRouter key="direct-library" initialEntries={['/library/artists']}>
+          <Harness />
+        </MemoryRouter>,
+      );
+    });
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe('/library');
   });
 
   it('toggles compact sidebar on Ctrl+B and prevents default bookmark shortcut', () => {

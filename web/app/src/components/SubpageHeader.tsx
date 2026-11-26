@@ -1,5 +1,6 @@
 import { ChevronLeft } from 'lucide-react';
-import { useNavigate } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
+import { performBackNavigation } from '@/lib/navigationHistory';
 
 interface SubpageHeaderProps {
   title: string;
@@ -9,15 +10,18 @@ interface SubpageHeaderProps {
 
 export function SubpageHeader({ title, backTo = '/settings', backLabel = 'Back to Settings' }: SubpageHeaderProps) {
   const navigate = useNavigate();
+  const location = useLocation();
 
   const handleBack = () => {
+    if (backTo === '/settings' && location.pathname.startsWith('/settings/')) {
+      performBackNavigation(navigate, location, 'button');
+      return;
+    }
     if (backTo) {
       void navigate(backTo);
-    } else if (window.history.length > 1) {
-      void navigate(-1);
-    } else {
-      void navigate('/settings');
+      return;
     }
+    performBackNavigation(navigate, location, 'button');
   };
 
   return (
@@ -27,7 +31,7 @@ export function SubpageHeader({ title, backTo = '/settings', backLabel = 'Back t
         onClick={handleBack}
         aria-label={backLabel}
         title={`${backLabel} (Esc)`}
-        className="grid size-10 place-items-center rounded-full bg-quinary text-primary transition-colors hover:bg-quaternary active:scale-95"
+        className="grid size-11 place-items-center rounded-full bg-quinary text-primary transition-colors hover:bg-quaternary active:scale-95"
       >
         <ChevronLeft size={22} strokeWidth={2.2} aria-hidden="true" />
       </button>

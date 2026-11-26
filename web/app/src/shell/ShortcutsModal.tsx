@@ -34,7 +34,7 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keys: ['Q'], description: 'Toggle Up Next side panel' },
       { keys: ['Ctrl', 'B'], description: 'Collapse or expand left sidebar' },
       { keys: ['Ctrl', 'K'], description: 'Focus music search (also Ctrl+F or /)' },
-      { keys: ['Esc'], description: 'Close active overlay, panel, or exit Settings' },
+      { keys: ['Esc'], description: 'Close active overlay, panel, or go back from detail pages and Settings' },
     ],
   },
   {

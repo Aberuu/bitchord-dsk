@@ -1,5 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router';
+import {
+  isEscBackRoute,
+  performBackNavigation,
+  useNavigationHistorySync,
+} from '@/lib/navigationHistory';
 import { getPlayhead, usePlayer } from '@/state/player';
 import { useUi } from '@/state/ui';
 import { findMusicSearchInput, focusAndSelectInput, isSearchFocusShortcut } from './searchShortcut';
@@ -54,15 +59,12 @@ function focusSearch(navigate: ReturnType<typeof useNavigate>) {
  * Global keyboard shortcuts for playback, navigation, and modal controls.
  */
 export function useKeyboardShortcuts() {
+  useNavigationHistorySync();
   const navigate = useNavigate();
   const location = useLocation();
   const locationRef = useRef(location);
-  const lastNonSettingsRef = useRef('/home');
   const lastNonLyricsRef = useRef('/home');
   locationRef.current = location;
-  if (!location.pathname.startsWith('/settings')) {
-    lastNonSettingsRef.current = `${location.pathname}${location.search}${location.hash}`;
-  }
   if (location.pathname !== '/lyrics') {
     lastNonLyricsRef.current = `${location.pathname}${location.search}${location.hash}`;
   }
@@ -111,8 +113,15 @@ export function useKeyboardShortcuts() {
           ui.setShortcutsOpen(false);
           return;
         }
-        // A menu or dialog over the player closes first, on its own.
-        if (targetClosest(event.target, '[role="menu"], [role="dialog"]:not([data-full-screen])')) return;
+        // A menu, listbox dropdown, or dialog over the player closes first, on its own.
+        if (
+          targetClosest(
+            event.target,
+            '[role="menu"], [role="listbox"], [role="dialog"]:not([data-full-screen]), [role="alertdialog"]',
+          )
+        ) {
+          return;
+        }
         if (ui.fullScreen && ui.fullScreenSearchOpen) {
           event.preventDefault();
           ui.setFullScreenSearchOpen(false);
@@ -130,20 +139,17 @@ export function useKeyboardShortcuts() {
           ui.audioOutputOpen ||
           ui.audioPipelineOpen ||
           ui.castModalOpen ||
+          ui.quickSignInOpen ||
+          ui.updateModalOpen ||
           ui.drawerOpen ||
-          document.querySelector('[role="dialog"], [role="menu"]')
+          document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')
         ) {
           return;
         }
-        const { pathname } = locationRef.current;
-        if (pathname.startsWith('/settings/')) {
-          event.preventDefault();
-          void navigate('/settings');
-          return;
-        }
-        if (pathname === '/settings') {
-          event.preventDefault();
-          void navigate(lastNonSettingsRef.current);
+        if (isEscBackRoute(locationRef.current.pathname)) {
+          if (performBackNavigation(navigate, locationRef.current, 'escape')) {
+            event.preventDefault();
+          }
         }
         return;
       }

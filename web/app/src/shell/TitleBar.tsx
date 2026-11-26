@@ -3,10 +3,13 @@ import { ArrowUpCircle, Copy, Minus, Square, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { isTauriDesktop } from '@/desktop/tauriBridge';
 import { useUi } from '@/state/ui';
+import { BackButton } from './BackButton';
 import { SidebarToggleButton } from './SidebarToggleButton';
 
 const captionBtn =
   'grid h-9 w-[46px] place-items-center text-secondary transition-colors duration-100 hover:bg-quinary hover:text-primary';
+const backCaptionBtn =
+  'grid h-9 w-[42px] place-items-center text-secondary transition-colors duration-100 enabled:hover:bg-quinary enabled:hover:text-primary disabled:cursor-not-allowed disabled:opacity-35';
 
 export function TitleBar() {
   const [maximized, setMaximized] = useState(false);
@@ -45,8 +48,11 @@ export function TitleBar() {
       className="absolute inset-x-0 top-0 z-[calc(var(--z-web-chrome)+2)] flex h-9 items-center bg-transparent select-none"
       data-tauri-drag-region
     >
-      <div className="hidden h-full w-(--web-navigation-compact-width) flex-none items-center justify-center sm:flex">
-        <SidebarToggleButton className={captionBtn} />
+      <div className="hidden h-full flex-none items-center sm:flex">
+        <div className="flex h-full w-(--web-navigation-compact-width) items-center justify-center">
+          <SidebarToggleButton className={captionBtn} />
+        </div>
+        <BackButton className={backCaptionBtn} iconSize={17} />
       </div>
       <div className="h-full flex-1" data-tauri-drag-region onDoubleClick={() => void win.toggleMaximize()} />
       <div className="flex h-full flex-none items-center">

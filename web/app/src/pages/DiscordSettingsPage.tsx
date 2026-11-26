@@ -1,4 +1,4 @@
-import { PageHeader } from '@/components/PageHeader';
+import { SubpageHeader } from '@/components/SubpageHeader';
 import { useDiscord } from '@/extension/useDiscord';
 import { DiscordIntegration, DiscordSettings } from './IntegrationSettings';
 import { settingsUi } from './settingsStyles';
@@ -8,7 +8,7 @@ export default function DiscordSettingsPage() {
   const status = useDiscord();
   return (
     <div className={settingsUi.centered}>
-      <PageHeader title="Discord" />
+      <SubpageHeader title="Discord" backTo="/settings" />
       <div className={settingsUi.body}>
         <section className={settingsUi.group}>
           <div className={settingsUi.integrationPlain}>

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Copy, Crown, LogOut, RefreshCw, Smartphone, Trash2, UserMinus, Wifi } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
-import { PageHeader } from '@/components/PageHeader';
+import { SubpageHeader } from '@/components/SubpageHeader';
 import { useSignedIn } from '@/data/music/queries';
 import { desktopApi, isTauriDesktop } from '@/desktop/tauriBridge';
 import { cleanCode, inviteUrl } from '@/party/invite';
@@ -48,7 +48,11 @@ export default function ListenTogetherPage() {
 
   return (
     <div className={settingsUi.centered}>
-      <PageHeader title="Listen Together" />
+      <SubpageHeader
+        title="Listen Together"
+        backTo={inviteCode ? '/home' : '/settings'}
+        backLabel={inviteCode ? 'Back to Home' : 'Back to Settings'}
+      />
       <div className={settingsUi.body}>
         {state.code ? (
           <InParty />
