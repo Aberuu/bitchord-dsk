@@ -12,6 +12,7 @@ import {
   Puzzle,
   Search,
   SlidersHorizontal,
+  Smartphone,
   Speaker,
   User,
   Users,
@@ -109,8 +110,10 @@ export default function SettingsPage() {
   const party = useParty();
   const pipeline = useAudioPipeline();
   const desktop = isTauriDesktop();
+  const desktopShell = desktop;
   const setPipelineOpen = useUi((s) => s.setAudioPipelineOpen);
   const setShortcutsOpen = useUi((s) => s.setShortcutsOpen);
+  const setPairMobileOpen = useUi((s) => s.setPairMobileOpen);
   const minimizeToTray = useUi((s) => s.minimizeToTray);
   const setMinimizeToTray = useUi((s) => s.setMinimizeToTray);
   const directSourceStream = usePlayer((s) => s.directSourceStream);
@@ -142,6 +145,17 @@ export default function SettingsPage() {
         keywords: 'party sync room invite code friends listen together',
         to: '/settings/listen-together',
       },
+      ...(desktopShell
+        ? [
+            {
+              id: 'pair-mobile',
+              title: 'Pair Mobile Device (QR)',
+              subtitle: 'Sign in on Android by scanning a Desktop QR code',
+              keywords: 'pair mobile android ios qr phone sync',
+              action: () => setPairMobileOpen(true),
+            },
+          ]
+        : []),
       {
         id: 'sources',
         title: 'Sources',
@@ -336,6 +350,14 @@ export default function SettingsPage() {
                 title="Listen together"
                 subtitle={party.code ? `Connected to party ${party.code}` : 'Share a code and play the same music, in time'}
               />
+              {desktopShell && (
+                <HubRow
+                  onClick={() => setPairMobileOpen(true)}
+                  icon={<Smartphone size={20} strokeWidth={1.9} aria-hidden="true" />}
+                  title="Pair Mobile Device"
+                  subtitle="Scan a QR code from BitChord Android to sign in instantly"
+                />
+              )}
             </section>
 
             {/* AUDIO QUALITY section matching Screenshot 1 */}

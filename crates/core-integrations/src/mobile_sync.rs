@@ -1,6 +1,8 @@
 use crate::cast::probe::list_active_lan_adapters;
+use crate::mobile_pairing::{MobilePairingService, PairedMobileRecord, RedeemRequest};
 use anyhow::{Context, Result};
 use axum::body::Bytes;
+use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, Path as AxumPath, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
@@ -293,6 +295,7 @@ struct SharedState {
     inner: Mutex<HubInner>,
     stats: Arc<ListeningStatsStore>,
     on_peer_sync: Arc<dyn Fn(PeerSyncResult) + Send + Sync>,
+    pairing: Arc<MobilePairingService>,
 }
 
 impl SharedState {
@@ -332,6 +335,14 @@ impl MobileSyncService {
         stats: Arc<ListeningStatsStore>,
         on_peer_sync: Arc<dyn Fn(PeerSyncResult) + Send + Sync>,
     ) -> Self {
+        Self::with_callbacks(stats, on_peer_sync, Arc::new(|_| {}))
+    }
+
+    pub fn with_callbacks(
+        stats: Arc<ListeningStatsStore>,
+        on_peer_sync: Arc<dyn Fn(PeerSyncResult) + Send + Sync>,
+        on_mobile_paired: Arc<dyn Fn(PairedMobileRecord) + Send + Sync>,
+    ) -> Self {
         Self {
             shared: Arc::new(SharedState {
                 inner: Mutex::new(HubInner {
@@ -341,9 +352,14 @@ impl MobileSyncService {
                 }),
                 stats,
                 on_peer_sync,
+                pairing: Arc::new(MobilePairingService::new(on_mobile_paired)),
             }),
             running: Mutex::new(None),
         }
+    }
+
+    pub fn pairing(&self) -> Arc<MobilePairingService> {
+        Arc::clone(&self.shared.pairing)
     }
 
     pub fn update_now_playing(&self, np: Option<MobileNowPlaying>) {
@@ -1095,6 +1111,10 @@ fn build_http_router(shared: Arc<SharedState>) -> Router {
             "/api/sync/now-playing",
             get(http_sync_now_playing).options(http_options),
         )
+        .route(
+            "/api/pair/redeem",
+            post(http_pair_redeem).options(http_options),
+        )
         .route("/{*path}", options(http_options))
         .layer(DefaultBodyLimit::max(MAX_BACKUP_BYTES))
         .with_state(shared)
@@ -1448,6 +1468,26 @@ async fn http_sync_download_backup(
             "export_failed",
             &err.to_string(),
         ),
+    }
+}
+
+async fn http_pair_redeem(
+    State(shared): State<Arc<SharedState>>,
+    payload: std::result::Result<Json<RedeemRequest>, JsonRejection>,
+) -> Response {
+    let Json(req) = match payload {
+        Ok(val) => val,
+        Err(err) => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                "invalid_json",
+                &format!("Invalid pairing request: {err}"),
+            );
+        }
+    };
+    match shared.pairing.redeem_offer(req) {
+        Ok(resp) => with_cors(Json(resp).into_response()),
+        Err((status, code, msg)) => json_err(status, code, &msg),
     }
 }
 

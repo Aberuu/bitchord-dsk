@@ -582,6 +582,10 @@ pub fn extract_signing_secret(cookie_header: &str) -> Option<String> {
     None
 }
 
+pub fn extract_signing_secret_present(cookie_header: &str) -> bool {
+    extract_signing_secret(cookie_header).is_some()
+}
+
 pub fn sapisid_hash(secret: &str, origin: &str, timestamp: u64) -> String {
     let mut hasher = Sha1::new();
     hasher.update(format!("{timestamp} {secret} {origin}").as_bytes());

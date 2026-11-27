@@ -9,9 +9,9 @@ use core_auth::{
 use core_downloads::{DownloadRequest, DownloadedTrack, LocalTrack};
 use core_integrations::{
     push_session_to_peer, CastDevice, CastLoadRequest, CastSessionState, CastSupportStatus,
-    DiscordNowPlaying, DiscordPresenceOptions, LastFmTokenAuth, MobileNowPlaying, MobileSyncStatus,
-    QuickLoginStatus, ScrobbleConfigUpdate, ScrobbleState, ScrobbleTrack, SmtcMetadata,
-    SmtcPlayback,
+    DesktopPairingOfferView, DesktopPairingPayload, DiscordNowPlaying, DiscordPresenceOptions,
+    LastFmTokenAuth, MobileNowPlaying, MobileSyncStatus, PairingStatusView, QuickLoginStatus,
+    ScrobbleConfigUpdate, ScrobbleState, ScrobbleTrack, SmtcMetadata, SmtcPlayback,
 };
 use core_lyrics::HttpRequestParams;
 use core_playback::{
@@ -80,6 +80,22 @@ pub struct DesktopBootstrap {
     pub vibrancy_mode: String,
     pub minimize_to_tray: bool,
     pub version: String,
+    pub platform: String,
+    pub is_mobile: bool,
+}
+
+fn current_platform_name() -> &'static str {
+    if cfg!(target_os = "android") {
+        "android"
+    } else if cfg!(target_os = "ios") {
+        "ios"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "windows"
+    }
 }
 
 #[tauri::command]
@@ -90,6 +106,8 @@ pub fn get_desktop_bootstrap(state: State<'_, AppState>) -> DesktopBootstrap {
         vibrancy_mode: state.vibrancy_mode.lock().clone(),
         minimize_to_tray: state.prefs.lock().minimize_to_tray,
         version: env!("CARGO_PKG_VERSION").to_string(),
+        platform: current_platform_name().to_string(),
+        is_mobile: cfg!(any(target_os = "android", target_os = "ios")),
     }
 }
 
@@ -1084,6 +1102,97 @@ pub fn mobile_sync_stop_server(state: State<'_, AppState>) -> MobileSyncStatus {
 #[tauri::command]
 pub fn mobile_sync_rotate_pin(state: State<'_, AppState>) -> MobileSyncStatus {
     state.mobile_sync.rotate_pin()
+}
+
+fn desktop_device_name() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "BitChord Desktop".to_string())
+}
+
+fn ensure_device_id(state: &AppState) -> String {
+    let mut prefs = state.prefs.lock();
+    if let Some(ref existing) = prefs.device_id {
+        if !existing.trim().is_empty() {
+            return existing.clone();
+        }
+    }
+    let generated = uuid::Uuid::new_v4().to_string();
+    prefs.device_id = Some(generated.clone());
+    let _ = prefs.save_to(&state.prefs_path);
+    generated
+}
+
+#[tauri::command]
+pub async fn pairing_start_desktop_qr(
+    include_spotify: bool,
+    state: State<'_, AppState>,
+) -> Result<DesktopPairingOfferView, String> {
+    let snap = state.vault.snapshot();
+    let yt_cookie = snap
+        .yt_cookie_header
+        .filter(|c| !c.trim().is_empty())
+        .ok_or_else(|| {
+            "Sign in to YouTube Music on Desktop first before pairing a mobile device.".to_string()
+        })?;
+
+    let sync_status = mobile_sync_start_server(state.clone()).await?;
+    let lan_ip = sync_status
+        .local_ip
+        .clone()
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let port = sync_status
+        .port
+        .ok_or_else(|| "Unable to bind local Wi-Fi pairing port.".to_string())?;
+    let lan_url = sync_status
+        .party_server_url
+        .clone()
+        .unwrap_or_else(|| format!("http://{lan_ip}:{port}"));
+
+    let desktop_id = ensure_device_id(&state);
+    let desktop_name = desktop_device_name();
+    let spotify_sp_dc = if include_spotify {
+        snap.spotify_sp_dc.filter(|s| !s.trim().is_empty())
+    } else {
+        None
+    };
+
+    let payload = DesktopPairingPayload {
+        v: 1,
+        yt_cookie_header: yt_cookie,
+        yt_selected_channel_id: snap.yt_selected_channel_id,
+        spotify_sp_dc: spotify_sp_dc.clone(),
+        desktop_id,
+        desktop_name,
+        desktop_version: env!("CARGO_PKG_VERSION").to_string(),
+        lan_url,
+        sync_pin: sync_status.sync_pin,
+        capabilities: vec![
+            "auth".to_string(),
+            "lan-sync".to_string(),
+            "party".to_string(),
+        ],
+        issued_at_ms: current_epoch_ms(),
+    };
+
+    state
+        .mobile_sync
+        .pairing()
+        .create_offer(&payload, &lan_ip, port, spotify_sp_dc.is_some())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn pairing_stop_desktop_qr(state: State<'_, AppState>) -> PairingStatusView {
+    state.mobile_sync.pairing().stop()
+}
+
+#[tauri::command]
+pub fn pairing_status(state: State<'_, AppState>) -> PairingStatusView {
+    state.mobile_sync.pairing().status()
 }
 
 #[tauri::command]

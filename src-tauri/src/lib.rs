@@ -166,11 +166,15 @@ pub fn run() {
             ));
 
             let app_handle_mobile = app.handle().clone();
-            let mobile_sync = Arc::new(MobileSyncService::new(
+            let app_handle_pair = app.handle().clone();
+            let mobile_sync = Arc::new(MobileSyncService::with_callbacks(
                 Arc::clone(&stats),
                 Arc::new(move |peer| {
                     let _ = app_handle_mobile.emit("stats://updated", json!({}));
                     let _ = app_handle_mobile.emit("mobile-sync://updated", &peer);
+                }),
+                Arc::new(move |paired| {
+                    let _ = app_handle_pair.emit("pairing://mobile-paired", &paired);
                 }),
             ));
 
@@ -400,6 +404,9 @@ pub fn run() {
             commands::mobile_sync_start_server,
             commands::mobile_sync_stop_server,
             commands::mobile_sync_rotate_pin,
+            commands::pairing_start_desktop_qr,
+            commands::pairing_stop_desktop_qr,
+            commands::pairing_status,
             commands::replay_save_file,
             commands::check_for_updates,
             commands::updater_get_prefs,

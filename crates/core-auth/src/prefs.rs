@@ -7,6 +7,18 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PairedDesktopConfig {
+    pub desktop_id: String,
+    pub desktop_name: String,
+    pub lan_url: String,
+    pub sync_pin: String,
+    pub paired_at_ms: i64,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopPrefs {
@@ -24,6 +36,10 @@ pub struct DesktopPrefs {
     pub mobile_sync_port: Option<u16>,
     #[serde(default)]
     pub skip_sign_in_prompt: bool,
+    #[serde(default)]
+    pub device_id: Option<String>,
+    #[serde(default)]
+    pub paired_desktop: Option<PairedDesktopConfig>,
 }
 
 impl Default for DesktopPrefs {
@@ -36,6 +52,8 @@ impl Default for DesktopPrefs {
             skipped_version: None,
             mobile_sync_port: None,
             skip_sign_in_prompt: false,
+            device_id: None,
+            paired_desktop: None,
         }
     }
 }
@@ -125,6 +143,15 @@ mod tests {
             skipped_version: Some("0.9.0".into()),
             mobile_sync_port: Some(48221),
             skip_sign_in_prompt: true,
+            device_id: Some("android-dev-1".into()),
+            paired_desktop: Some(PairedDesktopConfig {
+                desktop_id: "pc-1".into(),
+                desktop_name: "Studio PC".into(),
+                lan_url: "http://192.168.1.40:48221".into(),
+                sync_pin: "654321".into(),
+                paired_at_ms: 1_700_000_000_000,
+                capabilities: vec!["auth".into(), "lan-sync".into(), "party".into()],
+            }),
         }
         .save_to(&path)
         .expect("save custom");
@@ -139,6 +166,11 @@ mod tests {
         assert_eq!(loaded.skipped_version.as_deref(), Some("0.9.0"));
         assert_eq!(loaded.mobile_sync_port, Some(48221));
         assert!(loaded.skip_sign_in_prompt);
+        assert_eq!(loaded.device_id.as_deref(), Some("android-dev-1"));
+        assert_eq!(
+            loaded.paired_desktop.as_ref().map(|p| p.lan_url.as_str()),
+            Some("http://192.168.1.40:48221")
+        );
 
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }

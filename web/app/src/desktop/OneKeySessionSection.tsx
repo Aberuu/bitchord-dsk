@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Copy, KeyRound, QrCode, Send, ShieldCheck } from 'lucide-react';
+import { Check, Copy, KeyRound, QrCode, Send, ShieldCheck, Smartphone } from 'lucide-react';
 import { useState } from 'react';
 import { QrCodeSvg } from '@/components/QrCodeSvg';
 import {
@@ -41,6 +41,7 @@ export function OneKeySessionSection({
   const qc = useQueryClient();
   const spotifySignedIn = useSpotifySignedIn();
   const setQuickSignInOpen = useUi((s) => s.setQuickSignInOpen);
+  const setPairMobileOpen = useUi((s) => s.setPairMobileOpen);
 
   const [ttlMinutes, setTtlMinutes] = useState<string>('10080');
   const [pin, setPin] = useState('');
@@ -185,6 +186,18 @@ export function OneKeySessionSection({
             >
               {ytSignedIn ? 'Quick Sign-In Options' : 'Open Quick Sign-In'}
             </button>
+            {(ytSignedIn || preview) && (
+              <button
+                type="button"
+                className={settingsUi.inlineButton}
+                onClick={() => setPairMobileOpen(true)}
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <Smartphone size={14} aria-hidden="true" />
+                  <span>Pair Mobile (QR)</span>
+                </span>
+              </button>
+            )}
           </span>
         </div>
 

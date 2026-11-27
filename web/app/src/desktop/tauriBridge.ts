@@ -17,6 +17,9 @@ export interface DesktopBootstrap {
   vibrancyMode: string;
   minimizeToTray: boolean;
   version: string;
+  platform: 'windows' | 'macos' | 'linux' | 'android' | 'ios';
+  isMobile: boolean;
+  appMode?: 'desktop' | 'mobile';
 }
 
 export interface UpdateCheckResult {
@@ -123,6 +126,30 @@ export interface QuickLoginStatus {
 export interface QuickLoginCompletedEvent {
   accountName: string;
   keepSignedIn: boolean;
+}
+
+export interface DesktopPairingOfferView {
+  active: boolean;
+  offerId: string | null;
+  code: string | null;
+  qrUri: string | null;
+  lanIp: string | null;
+  port: number | null;
+  desktopName: string | null;
+  includeSpotify: boolean;
+  expiresAtMs: number | null;
+}
+
+export interface PairedMobileRecord {
+  deviceId: string;
+  deviceName: string;
+  platform: string;
+  pairedAtMs: number;
+}
+
+export interface PairingStatusView {
+  offer: DesktopPairingOfferView;
+  pairedDevices: PairedMobileRecord[];
 }
 
 export interface SmtcMetadataPayload {
@@ -501,8 +528,22 @@ interface BridgeInvokeResult {
   errorMessage?: string;
 }
 
-export function isTauriDesktop(): boolean {
+export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+export function isTauriDesktop(): boolean {
+  return isTauriRuntime();
+}
+
+export function isTauriMobile(): boolean {
+  if (!isTauriRuntime()) return false;
+  if (cachedBootstrap) return cachedBootstrap.isMobile || cachedBootstrap.appMode === 'mobile';
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+export function isDesktopShell(): boolean {
+  return isTauriRuntime() && !isTauriMobile();
 }
 
 let cachedBootstrap: DesktopBootstrap | null = null;
@@ -520,6 +561,10 @@ export function initDesktopBootstrap(): Promise<DesktopBootstrap | null> {
       cachedBootstrap = info;
       document.documentElement.dataset.desktop = 'true';
       document.documentElement.dataset.vibrancy = info.vibrancyMode;
+      document.documentElement.dataset.platform = info.platform;
+      if (info.isMobile || info.appMode === 'mobile') {
+        document.documentElement.dataset.mobileApp = 'true';
+      }
       return info;
     })
     .catch(() => null);
@@ -770,6 +815,13 @@ export const desktopApi = {
   mobileSyncRotatePin: () => invoke<MobileSyncStatus>('mobile_sync_rotate_pin'),
   onMobileSyncUpdated: (listener: (res: PeerSyncResult) => void) =>
     listen<PeerSyncResult>('mobile-sync://updated', (ev) => listener(ev.payload)),
+
+  pairingStartDesktopQr: (includeSpotify: boolean) =>
+    invoke<DesktopPairingOfferView>('pairing_start_desktop_qr', { includeSpotify }),
+  pairingStopDesktopQr: () => invoke<PairingStatusView>('pairing_stop_desktop_qr'),
+  pairingStatus: () => invoke<PairingStatusView>('pairing_status'),
+  onMobilePaired: (listener: (record: PairedMobileRecord) => void) =>
+    listen<PairedMobileRecord>('pairing://mobile-paired', (ev) => listener(ev.payload)),
 
   statsMergePeerBackup: (rawJson: string, deviceId?: string | null, deviceName?: string | null) =>
     invoke<PeerSyncResult>('stats_merge_peer_backup', {

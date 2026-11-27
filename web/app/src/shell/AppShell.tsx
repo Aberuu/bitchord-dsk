@@ -25,6 +25,7 @@ import { PlayerBar } from './PlayerBar';
 import { ShortcutsModal } from './ShortcutsModal';
 import { Sidebar } from './Sidebar';
 import { SidebarToggleButton } from './SidebarToggleButton';
+import { DesktopPairMobileModal } from '@/desktop/DesktopPairMobileModal';
 import { QuickSignInModal } from '@/desktop/QuickSignInModal';
 import { SidePanel } from './SidePanel';
 import { TitleBar } from './TitleBar';
@@ -150,6 +151,7 @@ export function AppShell() {
       <CastModal />
       <ShortcutsModal />
       <QuickSignInModal />
+      <DesktopPairMobileModal />
       <UpdateBannerAndGate />
     </div>
   );

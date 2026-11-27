@@ -1,10 +1,20 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
+use chacha20poly1305::aead::{Aead, KeyInit};
+use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use directories::ProjectDirs;
 use parking_lot::RwLock;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+static APP_DATA_DIR_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_app_data_dir_override(dir: PathBuf) {
+    let _ = APP_DATA_DIR_OVERRIDE.set(dir);
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -359,6 +369,9 @@ impl SecretVault {
 }
 
 pub fn app_data_dir() -> Result<PathBuf> {
+    if let Some(dir) = APP_DATA_DIR_OVERRIDE.get() {
+        return Ok(dir.clone());
+    }
     if let Some(dirs) = ProjectDirs::from("in", "bitchord", "BitChord") {
         Ok(dirs.data_local_dir().to_path_buf())
     } else {
@@ -427,14 +440,76 @@ pub fn unprotect_bytes(cipher: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
+const VAULT_ENVELOPE_MAGIC: &[u8; 4] = b"BCV1";
+const VAULT_NONCE_LEN: usize = 24;
+
+pub fn protect_bytes_with_key(plain: &[u8], key: &[u8; 32]) -> Result<Vec<u8>> {
+    let mut nonce_bytes = [0u8; VAULT_NONCE_LEN];
+    rand::rng().fill_bytes(&mut nonce_bytes);
+    let cipher = XChaCha20Poly1305::new(key.into());
+    let ct = cipher
+        .encrypt(XNonce::from_slice(&nonce_bytes), plain)
+        .map_err(|_| anyhow!("Failed to encrypt vault bytes"))?;
+    let mut out = Vec::with_capacity(VAULT_ENVELOPE_MAGIC.len() + VAULT_NONCE_LEN + ct.len());
+    out.extend_from_slice(VAULT_ENVELOPE_MAGIC);
+    out.extend_from_slice(&nonce_bytes);
+    out.extend_from_slice(&ct);
+    Ok(out)
+}
+
+pub fn unprotect_bytes_with_key(cipher_bytes: &[u8], key: &[u8; 32]) -> Result<Vec<u8>> {
+    if !cipher_bytes.starts_with(VAULT_ENVELOPE_MAGIC) {
+        return Ok(cipher_bytes.to_vec());
+    }
+    let header_len = VAULT_ENVELOPE_MAGIC.len() + VAULT_NONCE_LEN;
+    if cipher_bytes.len() <= header_len {
+        return Err(anyhow!("Truncated encrypted vault payload"));
+    }
+    let nonce = XNonce::from_slice(&cipher_bytes[VAULT_ENVELOPE_MAGIC.len()..header_len]);
+    let ct = &cipher_bytes[header_len..];
+    let cipher = XChaCha20Poly1305::new(key.into());
+    cipher
+        .decrypt(nonce, ct)
+        .map_err(|_| anyhow!("Vault decryption failed"))
+}
+
+#[cfg(not(windows))]
+fn load_or_create_vault_key() -> Result<[u8; 32]> {
+    let dir = app_data_dir()?;
+    fs::create_dir_all(&dir)?;
+    let key_path = dir.join("vault.key");
+    if key_path.exists() {
+        let bytes = fs::read(&key_path).context("read vault key")?;
+        if bytes.len() == 32 {
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&bytes);
+            return Ok(key);
+        }
+    }
+    let mut key = [0u8; 32];
+    rand::rng().fill_bytes(&mut key);
+    fs::write(&key_path, key).context("write vault key")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600));
+    }
+    Ok(key)
+}
+
 #[cfg(not(windows))]
 pub fn protect_bytes(plain: &[u8]) -> Result<Vec<u8>> {
-    Ok(plain.to_vec())
+    let key = load_or_create_vault_key()?;
+    protect_bytes_with_key(plain, &key)
 }
 
 #[cfg(not(windows))]
 pub fn unprotect_bytes(cipher: &[u8]) -> Result<Vec<u8>> {
-    Ok(cipher.to_vec())
+    if !cipher.starts_with(VAULT_ENVELOPE_MAGIC) {
+        return Ok(cipher.to_vec());
+    }
+    let key = load_or_create_vault_key()?;
+    unprotect_bytes_with_key(cipher, &key)
 }
 
 #[cfg(test)]
@@ -447,6 +522,24 @@ mod tests {
         let cipher = protect_bytes(secret).expect("protect");
         let plain = unprotect_bytes(&cipher).expect("unprotect");
         assert_eq!(plain, secret);
+    }
+
+    #[test]
+    fn aead_envelope_roundtrips_and_rejects_tampering() {
+        let key = [42u8; 32];
+        let secret = br#"{"ytCookieHeader":"SAPISID=mobile_secret"}"#;
+        let mut cipher = protect_bytes_with_key(secret, &key).expect("encrypt");
+        assert!(cipher.starts_with(VAULT_ENVELOPE_MAGIC));
+
+        let plain = unprotect_bytes_with_key(&cipher, &key).expect("decrypt");
+        assert_eq!(plain, secret);
+
+        let last = cipher.len() - 1;
+        cipher[last] ^= 0xFF;
+        assert!(unprotect_bytes_with_key(&cipher, &key).is_err());
+
+        let wrong_key = [7u8; 32];
+        assert!(unprotect_bytes_with_key(&protect_bytes_with_key(secret, &key).unwrap(), &wrong_key).is_err());
     }
 
     #[test]

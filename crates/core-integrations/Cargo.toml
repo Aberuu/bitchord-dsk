@@ -9,6 +9,7 @@ anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true
 bytes.workspace = true
+chacha20poly1305.workspace = true
 core-auth = { path = "../core-auth" }
 core-stats = { path = "../core-stats" }
 futures-util.workspace = true
@@ -23,13 +24,15 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 socket2 = "0.6"
-souvlaki.workspace = true
 tokio.workspace = true
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 tokio-tungstenite.workspace = true
 tracing.workspace = true
 url.workspace = true
 uuid.workspace = true
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+souvlaki.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [

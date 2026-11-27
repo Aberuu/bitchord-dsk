@@ -24,6 +24,8 @@ interface UiState {
   setQuickSignInOpen: (open: boolean) => void;
   quickSignInRemindedThisRun: boolean;
   remindQuickSignInLater: () => void;
+  pairMobileOpen: boolean;
+  setPairMobileOpen: (open: boolean) => void;
   updateModalOpen: boolean;
   setUpdateModalOpen: (open: boolean) => void;
   hasPendingUpdate: boolean;
@@ -84,6 +86,8 @@ export const useUi = create<UiState>()((set) => ({
   setQuickSignInOpen: (quickSignInOpen) => set({ quickSignInOpen }),
   quickSignInRemindedThisRun: false,
   remindQuickSignInLater: () => set({ quickSignInOpen: false, quickSignInRemindedThisRun: true }),
+  pairMobileOpen: false,
+  setPairMobileOpen: (pairMobileOpen) => set({ pairMobileOpen }),
   updateModalOpen: false,
   setUpdateModalOpen: (updateModalOpen) => set({ updateModalOpen }),
   hasPendingUpdate: false,
