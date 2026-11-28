@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Copy, KeyRound, QrCode, Send, ShieldCheck, Smartphone } from 'lucide-react';
 import { useState } from 'react';
+import { extractPairingCodeInput, PairingCodeBoxes } from '@/components/PairingCodeBoxes';
 import { QrCodeSvg } from '@/components/QrCodeSvg';
 import {
   desktopApi,
@@ -328,7 +329,7 @@ export function OneKeySessionSection({
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-[1fr_140px]">
+              <div className="flex flex-col gap-3">
                 <input
                   type="url"
                   aria-label="Peer quick sign-in URL"
@@ -344,18 +345,32 @@ export function OneKeySessionSection({
                   placeholder="http://192.168.1.42:47923/quick-login?code=..."
                   className={`${settingsUi.input} min-h-[44px] w-full font-mono text-[12px] text-primary`}
                 />
-                <input
-                  type="text"
-                  aria-label="Peer 6-character code"
-                  value={peerCode}
-                  onChange={(ev) => {
-                    setPeerCode(ev.target.value.toUpperCase());
-                    setPeerError(null);
-                    setPeerResult(null);
-                  }}
-                  placeholder="394-821"
-                  className={`${settingsUi.input} min-h-[44px] w-full text-center font-mono text-[14px] tracking-[0.08em] text-primary`}
-                />
+                <div className="flex flex-wrap items-center justify-between gap-2.5">
+                  <span className="type-callout font-medium text-secondary">
+                    6-Character Code
+                  </span>
+                  <PairingCodeBoxes
+                    value={peerCode}
+                    ariaLabel="Peer 6-character code"
+                    disabled={approvePeerMutation.isPending}
+                    onChange={(nextCode) => {
+                      setPeerCode(nextCode);
+                      setPeerError(null);
+                      setPeerResult(null);
+                    }}
+                    onPasteRaw={(rawClipboard) => {
+                      const trimmed = rawClipboard.trim();
+                      if (/^https?:\/\//i.test(trimmed) && !peerUrl.trim()) {
+                        setPeerUrl(trimmed);
+                      }
+                      const detected = extractPairingCodeInput(rawClipboard);
+                      if (detected) {
+                        setPeerError(null);
+                        setPeerResult(null);
+                      }
+                    }}
+                  />
+                </div>
               </div>
 
               {spotifySignedIn && (

@@ -11,6 +11,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { PairingCodeBoxes } from '@/components/PairingCodeBoxes';
 import { QrCodeSvg } from '@/components/QrCodeSvg';
 import {
   desktopApi,
@@ -516,15 +517,20 @@ function QuickSignInModalContent({
                 <div className="flex flex-col items-center rounded-[16px] border border-(--labelDivider) bg-quinary/60 p-3.5 text-center">
                   <QrCodeSvg value={quickLogin.qrUrl} size={144} label="BitChord Wi-Fi quick sign-in QR code" />
 
-                  <div className="mt-2.5 flex flex-wrap items-center justify-center gap-2">
-                    <div className="rounded-[12px] border border-(--labelDivider) bg-page px-3.5 py-2 font-mono text-[19px] font-bold tracking-[0.14em] text-primary">
-                      {quickLogin.code ?? '------'}
-                    </div>
+                  <div className="mt-3 flex w-full flex-col items-center gap-2">
+                    <PairingCodeBoxes
+                      value={quickLogin.code}
+                      readOnly
+                      ariaLabel={
+                        quickLogin.code ? `Pairing code ${quickLogin.code}` : 'Pairing code unavailable'
+                      }
+                    />
                     {quickLogin.code && (
                       <button
                         type="button"
+                        aria-label="Copy pairing code"
                         onClick={() => void handleCopy(quickLogin.code!, 'code')}
-                        className="inline-flex min-h-[44px] items-center gap-1.5 rounded-[12px] border border-(--labelDivider) bg-page px-3 text-[13px] font-medium text-primary transition-colors hover:bg-quaternary"
+                        className="inline-flex min-h-[44px] items-center gap-1.5 rounded-[12px] border border-(--labelDivider) bg-page px-3.5 text-[13px] font-medium text-primary transition-colors hover:bg-quaternary"
                       >
                         {copiedTarget === 'code' ? (
                           <Check size={15} className="text-green" aria-hidden="true" />

@@ -442,32 +442,81 @@ const QUICK_LOGIN_HTML: &str = r#"<!doctype html>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
+  :root {
+    color-scheme: dark;
+    --bg: #000000;
+    --card: #141416;
+    --card-border: rgba(255,255,255,0.12);
+    --box-bg: #0a0a0c;
+    --box-focus-bg: #1c1c20;
+    --box-border: rgba(255,255,255,0.16);
+    --box-focus: rgba(255,255,255,0.48);
+    --text: #f5f5f7;
+    --muted: #a1a1aa;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --bg: #ffffff;
+      --card: #f5f5f7;
+      --card-border: rgba(0,0,0,0.12);
+      --box-bg: #ffffff;
+      --box-focus-bg: #f0f0f3;
+      --box-border: rgba(0,0,0,0.16);
+      --box-focus: rgba(0,0,0,0.45);
+      --text: #111113;
+      --muted: #636366;
+    }
+  }
+  * { box-sizing: border-box; }
   body {
     margin: 0; min-height: 100dvh; display: grid; place-items: center; padding: 18px;
-    background: #000000; color: #f5f5f7;
+    background: var(--bg); color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
   .card {
     width: 100%; max-width: 420px; border-radius: 20px; padding: 24px;
-    background: #141416; border: 1px solid rgba(255,255,255,0.12);
+    background: var(--card); border: 1px solid var(--card-border);
   }
   h1 { margin: 0 0 6px; font-size: 20px; font-weight: 700; }
-  p { margin: 0 0 18px; font-size: 14px; color: #a1a1aa; line-height: 1.45; }
+  p { margin: 0 0 18px; font-size: 14px; color: var(--muted); line-height: 1.45; }
   label { display: block; font-size: 13px; font-weight: 600; margin: 14px 0 6px; }
   input, textarea {
-    width: 100%; border-radius: 12px; border: 1px solid rgba(255,255,255,0.16);
-    background: #1c1c1f; color: #ffffff; padding: 12px; font-size: 14px;
+    width: 100%; border-radius: 12px; border: 1px solid var(--box-border);
+    background: var(--box-bg); color: var(--text); padding: 12px; font-size: 14px;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    outline: none;
+  }
+  input:focus, textarea:focus {
+    border-color: var(--box-focus);
   }
   input { min-height: 44px; }
+  .otp-row {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .otp-box {
+    width: clamp(34px, 11vw, 44px); height: 46px; min-height: 44px; padding: 0;
+    border-radius: 10px; border: 1px solid var(--box-border);
+    background: var(--box-bg); color: var(--text);
+    text-align: center; font-size: 18px; font-weight: 700; text-transform: uppercase;
+  }
+  .otp-box:focus {
+    border-color: var(--box-focus);
+    background: var(--box-focus-bg);
+  }
+  .otp-dash {
+    width: 12px; text-align: center; font-weight: 600; font-size: 16px;
+    color: var(--muted); user-select: none;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
   button {
     width: 100%; min-height: 46px; margin-top: 18px; border: 0; border-radius: 12px;
     background: #fa2d48; color: #ffffff; font-size: 15px; font-weight: 600; cursor: pointer;
   }
   button:disabled { opacity: 0.55; cursor: not-allowed; }
   .msg { margin-top: 14px; font-size: 13px; line-height: 1.4; display: none; padding: 10px 12px; border-radius: 10px; }
-  .msg.ok { display: block; background: rgba(16,185,129,0.14); color: #6ee7b7; border: 1px solid rgba(16,185,129,0.35); }
-  .msg.err { display: block; background: rgba(239,68,68,0.14); color: #fca5a5; border: 1px solid rgba(239,68,68,0.35); }
+  .msg.ok { display: block; background: rgba(16,185,129,0.14); color: #10b981; border: 1px solid rgba(16,185,129,0.35); }
+  .msg.err { display: block; background: rgba(239,68,68,0.14); color: #ef4444; border: 1px solid rgba(239,68,68,0.35); }
   .hidden { display: none; }
 </style>
 </head>
@@ -476,8 +525,17 @@ const QUICK_LOGIN_HTML: &str = r#"<!doctype html>
     <h1>Sign in to BitChord Desktop</h1>
     <p>Confirm the pairing code shown on your PC and paste your 1-Key Session code (or YouTube Music cookie header).</p>
     <form id="f">
-      <label for="code">Pairing Code</label>
-      <input id="code" required autocomplete="off" autocapitalize="characters" placeholder="7K4-9MP" />
+      <label for="otp-0">Pairing Code</label>
+      <input id="code" type="hidden" required />
+      <div class="otp-row" role="group" aria-label="6-character pairing code">
+        <input id="otp-0" class="otp-box" data-otp-index="0" autocomplete="one-time-code" autocapitalize="characters" aria-label="Character 1 of 6" />
+        <input class="otp-box" data-otp-index="1" autocomplete="off" autocapitalize="characters" aria-label="Character 2 of 6" />
+        <input class="otp-box" data-otp-index="2" autocomplete="off" autocapitalize="characters" aria-label="Character 3 of 6" />
+        <span class="otp-dash" aria-hidden="true">-</span>
+        <input class="otp-box" data-otp-index="3" autocomplete="off" autocapitalize="characters" aria-label="Character 4 of 6" />
+        <input class="otp-box" data-otp-index="4" autocomplete="off" autocapitalize="characters" aria-label="Character 5 of 6" />
+        <input class="otp-box" data-otp-index="5" autocomplete="off" autocapitalize="characters" aria-label="Character 6 of 6" />
+      </div>
 
       <label for="secret">1-Key Session (BC1K-... / BC1P-...) or Cookie Header</label>
       <textarea id="secret" rows="3" required placeholder="Paste BC1K-... or SAPISID=..."></textarea>
@@ -494,18 +552,101 @@ const QUICK_LOGIN_HTML: &str = r#"<!doctype html>
   <script>
     const params = new URLSearchParams(location.search);
     const codeEl = document.getElementById('code');
+    const otpBoxes = Array.from(document.querySelectorAll('.otp-box'));
     const secretEl = document.getElementById('secret');
     const pinWrap = document.getElementById('pinWrap');
     const pinEl = document.getElementById('pin');
     const btn = document.getElementById('btn');
     const msg = document.getElementById('msg');
-    if (params.get('code')) codeEl.value = params.get('code').toUpperCase();
+
+    function sanitizeCode(raw) {
+      const m = /[?&]code=([a-z0-9-]+)/i.exec(raw || '');
+      const src = m ? m[1] : (raw || '');
+      return src.replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 6);
+    }
+
+    function syncHidden() {
+      const compact = otpBoxes.map((el) => sanitizeCode(el.value).slice(0, 1)).join('');
+      codeEl.value = compact.length > 3 ? compact.slice(0, 3) + '-' + compact.slice(3) : compact;
+    }
+
+    function fillBoxes(startIdx, raw) {
+      const clean = sanitizeCode(raw);
+      if (!clean) return;
+      const start = clean.length >= 6 ? 0 : startIdx;
+      for (let i = 0; i < clean.length && start + i < otpBoxes.length; i += 1) {
+        otpBoxes[start + i].value = clean[i];
+      }
+      syncHidden();
+      const nextIdx = Math.min(otpBoxes.length - 1, start + clean.length);
+      otpBoxes[nextIdx].focus();
+      otpBoxes[nextIdx].select();
+    }
+
+    if (params.get('code')) {
+      const initial = sanitizeCode(params.get('code'));
+      otpBoxes.forEach((box, idx) => { box.value = initial[idx] || ''; });
+      syncHidden();
+    }
+
+    otpBoxes.forEach((box, idx) => {
+      box.addEventListener('focus', () => box.select());
+      box.addEventListener('input', () => {
+        const clean = sanitizeCode(box.value);
+        if (!clean) {
+          box.value = '';
+          syncHidden();
+          return;
+        }
+        if (clean.length > 1) {
+          fillBoxes(idx, clean);
+          return;
+        }
+        box.value = clean;
+        syncHidden();
+        if (idx < otpBoxes.length - 1) {
+          otpBoxes[idx + 1].focus();
+          otpBoxes[idx + 1].select();
+        }
+      });
+      box.addEventListener('keydown', (e) => {
+        if (e.key === 'Backspace') {
+          e.preventDefault();
+          if (box.value) {
+            box.value = '';
+            syncHidden();
+          } else if (idx > 0) {
+            otpBoxes[idx - 1].value = '';
+            syncHidden();
+            otpBoxes[idx - 1].focus();
+          }
+        } else if (e.key === 'ArrowLeft' && idx > 0) {
+          e.preventDefault();
+          otpBoxes[idx - 1].focus();
+        } else if (e.key === 'ArrowRight' && idx < otpBoxes.length - 1) {
+          e.preventDefault();
+          otpBoxes[idx + 1].focus();
+        }
+      });
+      box.addEventListener('paste', (e) => {
+        e.preventDefault();
+        const text = (e.clipboardData || window.clipboardData).getData('text');
+        fillBoxes(idx, text);
+      });
+    });
+
     secretEl.addEventListener('input', () => {
       const v = secretEl.value.trim();
       pinWrap.classList.toggle('hidden', !v.startsWith('BC1P-'));
     });
     document.getElementById('f').addEventListener('submit', async (e) => {
       e.preventDefault();
+      syncHidden();
+      if (sanitizeCode(codeEl.value).length < 6) {
+        msg.textContent = 'Enter the 6-character pairing code shown on your PC.';
+        msg.className = 'msg err';
+        return;
+      }
       btn.disabled = true;
       msg.className = 'msg';
       const val = secretEl.value.trim();

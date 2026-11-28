@@ -121,6 +121,17 @@ describe('QuickSignInModal', () => {
 
     expect(host.querySelector('svg[role="img"]')).not.toBeNull();
     expect(dialog?.textContent).toContain('482-910');
+    const codeGroup = host.querySelector('[role="group"][aria-label="Pairing code 482-910"]');
+    expect(codeGroup).not.toBeNull();
+    expect(Array.from(codeGroup!.querySelectorAll('[data-slot-index]')).map((el) => el.textContent)).toEqual([
+      '4',
+      '8',
+      '2',
+      '9',
+      '1',
+      '0',
+    ]);
+    expect(codeGroup?.textContent).toBe('482-910');
     expect(startSpy).toHaveBeenCalledTimes(0);
 
     await act(async () => {

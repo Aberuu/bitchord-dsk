@@ -4,8 +4,8 @@
 
 **A modern, lightweight YouTube Music desktop player for Windows, engineered with Rust and Tauri 2.**
 
-[![Release](https://img.shields.io/badge/Release-v1.5.0-10b981?logo=github&logoColor=white)](https://github.com/Aberuu/bitchord-dsk/releases)
-[![Status](https://img.shields.io/badge/Status-v1.5.0%20Release-brightgreen)]()
+[![Release](https://img.shields.io/badge/Release-v1.5.1-10b981?logo=github&logoColor=white)](https://github.com/Aberuu/bitchord-dsk/releases)
+[![Status](https://img.shields.io/badge/Status-v1.5.1%20Release-brightgreen)]()
 [![Rust](https://img.shields.io/badge/Rust-2021%20Edition-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-v2-24C8D8?logo=tauri&logoColor=white)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-v19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
@@ -17,8 +17,8 @@
 ---
 
 > [!NOTE]
-> ### 🎉 Release `v1.5.0`
-> **BitChord Desktop v1.5.0 is now available for Windows!**
+> ### 🎉 Release `v1.5.1`
+> **BitChord Desktop v1.5.1 is now available for Windows!**
 > Full native Rust/Tauri 2 playback pipeline (CPAL/WASAPI/ASIO & DSD DoP), Bit-Perfect bypass, 10-band Web Audio EQ, synced lyrics, listening stats & Replay, CastV2/DLNA, external sources (`core-sources`), mobile sync, auto-updater, and deep Windows integration.
 
 ---
@@ -29,7 +29,7 @@
 
 ---
 
-## 🚦 Release & Feature Status (`v1.5.0`)
+## 🚦 Release & Feature Status (`v1.5.1`)
 
 | Feature | Status | Notes |
 |---|---|---|
@@ -260,7 +260,10 @@ target/release/bundle/nsis/
 
 ## 📦 Release History
 
-### `v1.5.0` (Current Release — Medium)
+### `v1.5.1` (Current Release — Minor)
+- **Quick Sign-In & Pairing Code UI:** Added `PairingCodeBoxes` (+ tests) and refined `quick_login.rs`, `OneKeySessionSection`, and `QuickSignInModal`.
+
+### `v1.5.0` (Medium)
 - **Desktop-to-Mobile Pairing:** Added `mobile_pairing.rs`, `DesktopPairMobileModal` (+ tests), and enhanced `mobile_sync.rs`, `vault.rs`, `prefs.rs`, and `OneKeySessionSection` for seamless desktop-mobile pairing.
 
 ### `v1.4.2` (Minor)
